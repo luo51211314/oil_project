@@ -67,7 +67,7 @@ pip install pybind11
 ### C++依赖
 
 1. **Eigen3**: 从 https://eigen.tuxfamily.org/ 下载
-   - 解压到 `D:/eigen-3.3.8`（或在CMakeLists.txt中更新路径）
+   - 解压到 `D:/eigen-3.4.0`（或在CMakeLists.txt中更新路径）
 
 2. **pybind11**: 通过pip/conda安装，然后记录cmake路径：
    - 通常位于: `D:/Anaconda/envs/oil/Lib/site-packages/pybind11/share/cmake/pybind11`
