@@ -47,7 +47,7 @@ python_prototype/
 - **Python**: 3.9 或更高版本
 - **CMake**: 3.15 或更高版本
 - **C++编译器**: MSVC (Windows) 或 GCC/Clang (Linux/Mac)
-- **Eigen3**: 3.3.8（仅头文件库）
+- **Eigen3**: 3.4.0（仅头文件库）
 
 ### Python依赖
 
