@@ -672,7 +672,8 @@ class MainWindow(QMainWindow):
                 sim.setWellParameters(well_x, well_y, well_z, 0.05, well_pressure)
                 
                 result = sim.runSimulation()
-                self.sim_data.generate_from_cpp(result, nx, ny, nz, lx, ly, lz)
+                grid_lines = sim.getGridLines()
+                self.sim_data.generate_from_cpp(result, nx, ny, nz, lx, ly, lz, grid_lines)
             else:
                 self.sim_data.generate_mock_data(nx, ny, nz, lx, ly, lz, num_fracs, 
                                                 min_len, max_len, well_x, well_y, well_z, 

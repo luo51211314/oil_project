@@ -1873,7 +1873,37 @@ public:
         }
         return result;
     }
-    
+
+    std::vector<std::tuple<double,double,double,double,double,double>> getGridLines() {
+        std::vector<std::tuple<double,double,double,double,double,double>> result;
+        for (int i = 0; i < n_leaf; ++i) {
+            const auto& leaf = leaves[i];
+            double x_min = leaf.center.x - leaf.dx * 0.5;
+            double x_max = leaf.center.x + leaf.dx * 0.5;
+            double y_min = leaf.center.y - leaf.dy * 0.5;
+            double y_max = leaf.center.y + leaf.dy * 0.5;
+            double z_min = leaf.center.z - leaf.dz * 0.5;
+            double z_max = leaf.center.z + leaf.dz * 0.5;
+
+            // 12条边: (x_min,y_min,z_min)-(x_max,y_min,z_min)
+            result.push_back(std::make_tuple(x_min, y_min, z_min, x_max, y_min, z_min));
+            result.push_back(std::make_tuple(x_min, y_max, z_min, x_max, y_max, z_min));
+            result.push_back(std::make_tuple(x_min, y_min, z_max, x_max, y_min, z_max));
+            result.push_back(std::make_tuple(x_min, y_max, z_max, x_max, y_max, z_max));
+
+            result.push_back(std::make_tuple(x_min, y_min, z_min, x_min, y_max, z_min));
+            result.push_back(std::make_tuple(x_max, y_min, z_min, x_max, y_max, z_min));
+            result.push_back(std::make_tuple(x_min, y_min, z_max, x_min, y_max, z_max));
+            result.push_back(std::make_tuple(x_max, y_min, z_max, x_max, y_max, z_max));
+
+            result.push_back(std::make_tuple(x_min, y_min, z_min, x_min, y_min, z_max));
+            result.push_back(std::make_tuple(x_max, y_min, z_min, x_max, y_min, z_max));
+            result.push_back(std::make_tuple(x_min, y_max, z_min, x_min, y_max, z_max));
+            result.push_back(std::make_tuple(x_max, y_max, z_min, x_max, y_max, z_max));
+        }
+        return result;
+    }
+
     SimulationResult runSimulation() {
         SimulationResult result;
         std::cout << "=== Simulation Parameters ===" << std::endl;
@@ -1964,5 +1994,6 @@ PYBIND11_MODULE(edfm_core, m) {
         .def("setSimulationParameters", &SimulatorLGR::setSimulationParameters)
         .def("runSimulation", &SimulatorLGR::runSimulation)
         .def("getPressureData", &SimulatorLGR::getPressureData)
-        .def("getFractureVertices", &SimulatorLGR::getFractureVertices);
+        .def("getFractureVertices", &SimulatorLGR::getFractureVertices)
+        .def("getGridLines", &SimulatorLGR::getGridLines);
 }
