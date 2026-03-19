@@ -14,7 +14,7 @@ find_package(pybind11 REQUIRED)
 
 # 创建模块 - 包含完整的EDFM算法
 pybind11_add_module(edfm_core
-    src/edfm_3d_blackoil_lgr.cpp
+    src/lgr/edfm_3d_blackoil_lgr.cpp
 )
 
 target_include_directories(edfm_core PRIVATE ${EIGEN3_INCLUDE_DIR})
