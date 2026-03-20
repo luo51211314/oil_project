@@ -231,52 +231,64 @@ class VTKRenderer:
         self.cache['fracture_actors'].append(line_actor)
     
     def create_grid_lines(self, sim_data):
-        """创建网格线"""
-        lx = sim_data.grid_info['Lx']
-        ly = sim_data.grid_info['Ly']
-        lz = sim_data.grid_info['Lz']
-        nx = sim_data.grid_info['nx']
-        ny = sim_data.grid_info['ny']
-        nz = sim_data.grid_info['nz']
-        
+        """创建网格线 - 使用LGR真实网格数据"""
         points = vtk.vtkPoints()
         lines = vtk.vtkCellArray()
         
-        # X方向线
-        for i in range(nx + 1):
-            x = i * lx / nx
-            for k in range(nz + 1):
-                z = k * lz / nz
-                p1 = points.InsertNextPoint(x, 0, z)
-                p2 = points.InsertNextPoint(x, ly, z)
+        # 如果有真实的LGR网格线数据，使用它
+        if sim_data.grid_lines:
+            for line_data in sim_data.grid_lines:
+                # line_data: (x1, y1, z1, x2, y2, z2)
+                p1 = points.InsertNextPoint(line_data[0], line_data[1], line_data[2])
+                p2 = points.InsertNextPoint(line_data[3], line_data[4], line_data[5])
                 line = vtk.vtkLine()
                 line.GetPointIds().SetId(0, p1)
                 line.GetPointIds().SetId(1, p2)
                 lines.InsertNextCell(line)
-        
-        # Y方向线
-        for j in range(ny + 1):
-            y = j * ly / ny
-            for k in range(nz + 1):
-                z = k * lz / nz
-                p1 = points.InsertNextPoint(0, y, z)
-                p2 = points.InsertNextPoint(lx, y, z)
-                line = vtk.vtkLine()
-                line.GetPointIds().SetId(0, p1)
-                line.GetPointIds().SetId(1, p2)
-                lines.InsertNextCell(line)
-        
-        # Z方向线
-        for i in range(nx + 1):
-            x = i * lx / nx
+        else:
+            # 回退到粗网格显示
+            lx = sim_data.grid_info['Lx']
+            ly = sim_data.grid_info['Ly']
+            lz = sim_data.grid_info['Lz']
+            nx = sim_data.grid_info['nx']
+            ny = sim_data.grid_info['ny']
+            nz = sim_data.grid_info['nz']
+            
+            # X方向线
+            for i in range(nx + 1):
+                x = i * lx / nx
+                for k in range(nz + 1):
+                    z = k * lz / nz
+                    p1 = points.InsertNextPoint(x, 0, z)
+                    p2 = points.InsertNextPoint(x, ly, z)
+                    line = vtk.vtkLine()
+                    line.GetPointIds().SetId(0, p1)
+                    line.GetPointIds().SetId(1, p2)
+                    lines.InsertNextCell(line)
+            
+            # Y方向线
             for j in range(ny + 1):
                 y = j * ly / ny
-                p1 = points.InsertNextPoint(x, y, 0)
-                p2 = points.InsertNextPoint(x, y, lz)
-                line = vtk.vtkLine()
-                line.GetPointIds().SetId(0, p1)
-                line.GetPointIds().SetId(1, p2)
-                lines.InsertNextCell(line)
+                for k in range(nz + 1):
+                    z = k * lz / nz
+                    p1 = points.InsertNextPoint(0, y, z)
+                    p2 = points.InsertNextPoint(lx, y, z)
+                    line = vtk.vtkLine()
+                    line.GetPointIds().SetId(0, p1)
+                    line.GetPointIds().SetId(1, p2)
+                    lines.InsertNextCell(line)
+            
+            # Z方向线
+            for i in range(nx + 1):
+                x = i * lx / nx
+                for j in range(ny + 1):
+                    y = j * ly / ny
+                    p1 = points.InsertNextPoint(x, y, 0)
+                    p2 = points.InsertNextPoint(x, y, lz)
+                    line = vtk.vtkLine()
+                    line.GetPointIds().SetId(0, p1)
+                    line.GetPointIds().SetId(1, p2)
+                    lines.InsertNextCell(line)
         
         poly_data = vtk.vtkPolyData()
         poly_data.SetPoints(points)

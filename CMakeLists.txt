@@ -5,16 +5,22 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # 添加Eigen
-set(EIGEN3_INCLUDE_DIR "D:/eigen-3.3.8")
+# lxw
+# set(EIGEN3_INCLUDE_DIR "D:/eigen-3.3.8")
+# ypw 
+set(EIGEN3_INCLUDE_DIR "D:/mingw64/eigen")
 include_directories(${EIGEN3_INCLUDE_DIR})
 
 # pybind11
-set(pybind11_DIR "D:/Anaconda/envs/oil/Lib/site-packages/pybind11/share/cmake/pybind11")
+# lxw
+# set(pybind11_DIR "D:/Anaconda/envs/oil/Lib/site-packages/pybind11/share/cmake/pybind11")
+# ypw
+set(pybind11_DIR "D:/anaconda3/envs/transformers/Lib/site-packages/pybind11/share/cmake/pybind11")
 find_package(pybind11 REQUIRED)
 
 # 创建模块 - 包含完整的EDFM算法
 pybind11_add_module(edfm_core
-    src/edfm_3d_blackoil_lgr.cpp
+    src/lgr/edfm_3d_blackoil_lgr.cpp
 )
 
 target_include_directories(edfm_core PRIVATE ${EIGEN3_INCLUDE_DIR})
