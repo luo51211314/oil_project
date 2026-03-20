@@ -4,6 +4,7 @@
 """
 import sys
 import io
+import json
 
 
 class OutputCapture:
@@ -107,3 +108,45 @@ class SimulationData:
             self.fractures.append(frac)
         
         print(f"Generated {len(self.pressure_field)} pressure points, {len(self.fractures)} fractures")
+
+    def to_dict(self):
+        """序列化模拟结果，供子进程返回给UI进程。"""
+        return {
+            'grid_info': dict(self.grid_info),
+            'pressure_field': [list(point) for point in self.pressure_field],
+            'temperature_field': [list(point) for point in self.temperature_field],
+            'stress_field': [list(point) for point in self.stress_field],
+            'fractures': [
+                {
+                    'id': fracture.get('id'),
+                    'points': [list(point) for point in fracture.get('points', [])]
+                }
+                for fracture in self.fractures
+            ],
+            'wells': list(self.wells),
+        }
+
+    def load_dict(self, payload):
+        """从序列化结果恢复模拟数据。"""
+        self.grid_info = dict(payload.get('grid_info', self.grid_info))
+        self.pressure_field = [tuple(point) for point in payload.get('pressure_field', [])]
+        self.temperature_field = [tuple(point) for point in payload.get('temperature_field', [])]
+        self.stress_field = [tuple(point) for point in payload.get('stress_field', [])]
+        self.fractures = [
+            {
+                'id': fracture.get('id'),
+                'points': [tuple(point) for point in fracture.get('points', [])]
+            }
+            for fracture in payload.get('fractures', [])
+        ]
+        self.wells = list(payload.get('wells', []))
+
+    def save_json(self, output_path):
+        """将模拟结果写入JSON文件。"""
+        with open(output_path, 'w', encoding='utf-8') as fp:
+            json.dump(self.to_dict(), fp)
+
+    def load_json(self, input_path):
+        """从JSON文件加载模拟结果。"""
+        with open(input_path, 'r', encoding='utf-8') as fp:
+            self.load_dict(json.load(fp))

@@ -4,34 +4,27 @@
 """
 import sys
 import os
-import math
+import json
+import re
+import tempfile
 
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QLabel, QPushButton, QSplitter, QFrame, QToolBar, QAction,
                              QStatusBar, QTabWidget, QStackedWidget, QTextEdit, QGroupBox,
                              QTableWidget, QSpinBox, QDoubleSpinBox, QGridLayout, QComboBox,
+                             QProgressBar,
                              QCheckBox, QTableWidgetItem)
-from PyQt5.QtCore import Qt, QSize
+from PyQt5.QtCore import Qt, QSize, QProcess
 from PyQt5.QtGui import QIcon, QFont, QColor, QPixmap, QPainter
 from vtk.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 import vtk
 
 # 导入本地模块
-from .data_models import OutputCapture, SimulationData
+from .data_models import SimulationData
 
 # 导入可视化模块
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from visual.vtk_renderer import VTKRenderer
-
-# 导入C++模块
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'build', 'Release'))
-try:
-    import edfm_core
-    HAS_CPP_MODULE = True
-    print("Successfully imported edfm_core module")
-except ImportError as e:
-    HAS_CPP_MODULE = False
-    print(f"C++ module not found: {e}, using mock data")
 
 
 class AlgorithmSelector(QWidget):
@@ -121,8 +114,18 @@ class MainWindow(QMainWindow):
         self.setGeometry(50, 50, 1600, 1000)
         
         self.sim_data = SimulationData()
+        self.project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self.current_tab = "Grid"
         self.show_fractures_enabled = False
+        self.sim_process = None
+        self.sim_output_buffer = ""
+        self.pending_result_path = None
+        self.step_log_interval = 30
+        self.current_sim_total_days = 100.0
+        self.current_progress_days = 0.0
+        self.current_progress_step = 0
+        self.estimated_total_steps = 700
+        self.pending_step_summary = False
         
         # 缓存VTK对象，避免重复生成
         self.cache = {
@@ -183,9 +186,28 @@ class MainWindow(QMainWindow):
         self.bottom_panel = QWidget()
         self.bottom_panel.setStyleSheet("background-color: #1e1e1e; border: none;")
         self.bottom_panel.setMaximumHeight(200)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setFixedHeight(22)
+        self.progress_bar.setStyleSheet("""
+            QProgressBar {
+                background-color: #1e1e1e;
+                color: #cccccc;
+                border: 1px solid #3d3d3d;
+                text-align: center;
+            }
+            QProgressBar::chunk {
+                background-color: #4CAF50;
+            }
+        """)
+        self.update_progress_bar(0.0, 0, "等待运行")
         
         main_layout.addWidget(self.main_splitter, 1)  # stretch factor
         main_layout.addWidget(self.bottom_panel)
+        main_layout.addWidget(self.progress_bar)
     
     def create_algorithm_bar_widget(self):
         """创建算法选择栏部件 - 与原文件一致"""
@@ -245,8 +267,8 @@ class MainWindow(QMainWindow):
         toolbar.addSeparator()
         
         # Run Sim按钮（绿色高亮）
-        run_btn = QPushButton("▶ Run Simulation")
-        run_btn.setStyleSheet("""
+        self.run_btn = QPushButton("▶ Run Simulation")
+        self.run_btn.setStyleSheet("""
             QPushButton {
                 background-color: #4CAF50;
                 color: white;
@@ -259,8 +281,8 @@ class MainWindow(QMainWindow):
                 background-color: #45a049;
             }
         """)
-        run_btn.clicked.connect(self.run_simulation)
-        toolbar.addWidget(run_btn)
+        self.run_btn.clicked.connect(self.run_simulation)
+        toolbar.addWidget(self.run_btn)
     
     def create_left_panel(self):
         """创建左侧面板 - 与原文件一致"""
@@ -415,6 +437,71 @@ class MainWindow(QMainWindow):
         
         group.setLayout(grid)
         layout.addWidget(group)
+
+        hf_group = QGroupBox("人工裂缝参数")
+        hf_group.setStyleSheet(self.groupbox_style())
+        hf_grid = QGridLayout()
+
+        self.check_enable_hf = QCheckBox("启用人工裂缝")
+        self.check_enable_hf.setChecked(False)
+
+        self.spin_hf_count = QSpinBox()
+        self.spin_hf_count.setRange(0, 50)
+        self.spin_hf_count.setValue(3)
+
+        self.spin_hf_center_x = QDoubleSpinBox()
+        self.spin_hf_center_x.setRange(0, 10000)
+        self.spin_hf_center_x.setValue(500)
+        self.spin_hf_center_y = QDoubleSpinBox()
+        self.spin_hf_center_y.setRange(0, 10000)
+        self.spin_hf_center_y.setValue(250)
+        self.spin_hf_center_z = QDoubleSpinBox()
+        self.spin_hf_center_z.setRange(0, 1000)
+        self.spin_hf_center_z.setValue(25)
+
+        self.spin_hf_spacing_x = QDoubleSpinBox()
+        self.spin_hf_spacing_x.setDecimals(1)
+        self.spin_hf_spacing_x.setRange(0, 1000)
+        self.spin_hf_spacing_x.setValue(100.1)
+
+        self.spin_hf_length = QDoubleSpinBox()
+        self.spin_hf_length.setRange(1, 2000)
+        self.spin_hf_length.setValue(200)
+        self.spin_hf_height = QDoubleSpinBox()
+        self.spin_hf_height.setRange(1, 1000)
+        self.spin_hf_height.setValue(40)
+
+        self.spin_hf_aperture = QDoubleSpinBox()
+        self.spin_hf_aperture.setDecimals(4)
+        self.spin_hf_aperture.setRange(0.0, 1.0)
+        self.spin_hf_aperture.setValue(0.001)
+
+        self.spin_hf_perm = QDoubleSpinBox()
+        self.spin_hf_perm.setRange(0, 1000000)
+        self.spin_hf_perm.setValue(10000)
+
+        hf_grid.addWidget(self.check_enable_hf, 0, 0, 1, 2)
+        hf_grid.addWidget(QLabel("裂缝数量:"), 1, 0)
+        hf_grid.addWidget(self.spin_hf_count, 1, 1)
+        hf_grid.addWidget(QLabel("中心 X (m):"), 2, 0)
+        hf_grid.addWidget(self.spin_hf_center_x, 2, 1)
+        hf_grid.addWidget(QLabel("中心 Y (m):"), 3, 0)
+        hf_grid.addWidget(self.spin_hf_center_y, 3, 1)
+        hf_grid.addWidget(QLabel("中心 Z (m):"), 4, 0)
+        hf_grid.addWidget(self.spin_hf_center_z, 4, 1)
+        hf_grid.addWidget(QLabel("X 向间距 (m):"), 5, 0)
+        hf_grid.addWidget(self.spin_hf_spacing_x, 5, 1)
+        hf_grid.addWidget(QLabel("裂缝长度 (m):"), 6, 0)
+        hf_grid.addWidget(self.spin_hf_length, 6, 1)
+        hf_grid.addWidget(QLabel("裂缝高度 (m):"), 7, 0)
+        hf_grid.addWidget(self.spin_hf_height, 7, 1)
+        hf_grid.addWidget(QLabel("裂缝开度 (m):"), 8, 0)
+        hf_grid.addWidget(self.spin_hf_aperture, 8, 1)
+        hf_grid.addWidget(QLabel("裂缝渗透率 (Darcy):"), 9, 0)
+        hf_grid.addWidget(self.spin_hf_perm, 9, 1)
+
+        hf_group.setLayout(hf_grid)
+        layout.addWidget(hf_group)
         layout.addStretch()
         
         return page
@@ -622,99 +709,291 @@ class MainWindow(QMainWindow):
         self.cache['scalar_bar'] = None
         self.cache['grid_lines_actor'] = None
         self.cache['data_hash'] = None
+        if hasattr(self, 'vtk_renderer'):
+            self.vtk_renderer.clear_cache()
         print("Cache cleared")
+
+    def reset_progress_state(self):
+        """重置模拟进度状态。"""
+        self.current_sim_total_days = 100.0
+        self.current_progress_days = 0.0
+        self.current_progress_step = 0
+        self.pending_step_summary = False
+        self.update_progress_bar(0.0, 0, "准备启动")
+
+    def update_progress_bar(self, current_days, step, status_text="运行中"):
+        """按步数估算更新底部进度条。"""
+        safe_days = max(0.0, current_days)
+        estimated_steps = max(1, self.estimated_total_steps)
+        safe_step = max(0, step)
+        raw_progress = (safe_step / estimated_steps) * 100
+        if 0 < safe_step < estimated_steps and raw_progress < 1.0:
+            progress = 1
+        elif safe_step < estimated_steps and raw_progress > 99.0:
+            progress = 99
+        else:
+            progress = int(round(max(0.0, min(raw_progress, 100.0))))
+        self.progress_bar.setValue(progress)
+        self.progress_bar.setFormat(
+            f"模拟进度 {progress}%  |  Step {safe_step}  |  "
+            f"t = {self.format_day_value(safe_days)} 天  |  {status_text}"
+        )
+
+    def format_day_value(self, value):
+        """根据数值大小格式化时间，避免前期进度长期显示为 0.00。"""
+        if value >= 1.0:
+            return f"{value:.2f}"
+        if value >= 0.01:
+            return f"{value:.4f}"
+        return f"{value:.6g}"
+
+    def mark_progress_complete(self):
+        """标记模拟完成。"""
+        self.progress_bar.setValue(100)
+        self.progress_bar.setFormat(
+            f"模拟进度 100%  |  Step {self.current_progress_step}  |  "
+            f"t = {self.format_day_value(self.current_progress_days)} 天  |  模拟完成"
+        )
+
+    def mark_progress_failed(self):
+        """标记模拟失败。"""
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFormat("模拟进度 0%  |  运行失败")
+
+    def process_simulation_log_line(self, line):
+        """解析子进程日志，更新进度条并节流 Step 日志显示。"""
+        sim_time_match = re.match(r"^Simulation time:\s*([0-9eE.+-]+)\s*days$", line)
+        if sim_time_match:
+            self.current_sim_total_days = float(sim_time_match.group(1))
+            self.update_progress_bar(self.current_progress_days, self.current_progress_step, "运行中")
+            self.append_sim_status(line)
+            return
+
+        step_match = re.match(r"^Step\s+(\d+)\s+t=([0-9eE.+-]+)\s+dt=", line)
+        if step_match:
+            step = int(step_match.group(1))
+            self.current_progress_step = max(self.current_progress_step, step)
+            should_display = ("ok" in line) and (step % self.step_log_interval == 0)
+            self.pending_step_summary = should_display
+            if should_display:
+                self.append_sim_status(line)
+            return
+
+        summary_match = re.match(r"^\s*t=([0-9eE.+-]+)\s+days,\s+P:", line)
+        if summary_match:
+            current_days = float(summary_match.group(1))
+            self.current_progress_days = max(self.current_progress_days, current_days)
+            self.update_progress_bar(self.current_progress_days, self.current_progress_step, "运行中")
+            if self.pending_step_summary:
+                self.append_sim_status(line)
+            self.pending_step_summary = False
+            return
+
+        if line.startswith("Step "):
+            self.pending_step_summary = False
+            return
+
+        self.pending_step_summary = False
+        self.append_sim_status(line)
     
+    def collect_simulation_params(self):
+        """收集当前UI中的模拟参数。"""
+        return {
+            'nx': self.spin_nx.value(),
+            'ny': self.spin_ny.value(),
+            'nz': self.spin_nz.value(),
+            'lx': self.spin_lx.value(),
+            'ly': self.spin_ly.value(),
+            'lz': self.spin_lz.value(),
+            'num_fracs': self.spin_num_fracs.value(),
+            'min_len': self.spin_min_len.value(),
+            'max_len': self.spin_max_len.value(),
+            'aperture': self.spin_aperture.value(),
+            'well_x': self.spin_well_x.value(),
+            'well_y': self.spin_well_y.value(),
+            'well_z': self.spin_well_z.value(),
+            'well_pressure': self.spin_well_pressure.value(),
+            'well_radius': self.spin_well_radius.value(),
+            'hf_enabled': self.check_enable_hf.isChecked(),
+            'hf_count': self.spin_hf_count.value(),
+            'hf_center_x': self.spin_hf_center_x.value(),
+            'hf_center_y': self.spin_hf_center_y.value(),
+            'hf_center_z': self.spin_hf_center_z.value(),
+            'hf_spacing_x': self.spin_hf_spacing_x.value(),
+            'hf_length': self.spin_hf_length.value(),
+            'hf_height': self.spin_hf_height.value(),
+            'hf_aperture': self.spin_hf_aperture.value(),
+            'hf_perm': self.spin_hf_perm.value(),
+        }
+
     def run_simulation(self):
-        """运行模拟 - 与原文件完全一致"""
-        # 运行新模拟前清除缓存
+        """通过子进程运行模拟，并实时显示算法输出。"""
+        if self.sim_process and self.sim_process.state() != QProcess.NotRunning:
+            self.append_sim_status("Simulation is already running.")
+            return
+
+        params = self.collect_simulation_params()
         self.clear_cache()
-        
+        self.reset_progress_state()
+
         self.status_bar.showMessage("Running simulation...")
         self.clear_sim_status()
         self.append_sim_status("=" * 50)
         self.append_sim_status("  EDFM Black Oil Simulation Starting...")
         self.append_sim_status("=" * 50)
-        
-        output_capture = OutputCapture(self.append_sim_status)
-        sys.stdout = output_capture
-        
+        self.append_sim_status(
+            f"Grid: {params['nx']}x{params['ny']}x{params['nz']}, "
+            f"Domain: {params['lx']}x{params['ly']}x{params['lz']} m"
+        )
+        self.append_sim_status(
+            f"Fractures: {params['num_fracs']}, Length: {params['min_len']}-{params['max_len']} m, "
+            f"Aperture: {params['aperture']} m"
+        )
+        self.append_sim_status(
+            f"Well: ({params['well_x']}, {params['well_y']}, {params['well_z']}), "
+            f"Pressure: {params['well_pressure']} bar"
+        )
+        self.append_sim_status("")
+
+        tmp_dir = os.path.join(self.project_root, '.tmp')
+        os.makedirs(tmp_dir, exist_ok=True)
+        fd, self.pending_result_path = tempfile.mkstemp(prefix='simulation_result_', suffix='.json', dir=tmp_dir)
+        os.close(fd)
+        self.sim_output_buffer = ""
+
+        self.sim_process = QProcess(self)
+        self.sim_process.setWorkingDirectory(self.project_root)
+        self.sim_process.setProgram(sys.executable)
+        self.sim_process.setArguments([
+            '-u',
+            '-m',
+            'front.simulation_runner',
+            '--output',
+            self.pending_result_path,
+            '--params',
+            json.dumps(params),
+        ])
+        self.sim_process.setProcessChannelMode(QProcess.MergedChannels)
+        self.sim_process.readyReadStandardOutput.connect(self.handle_process_output)
+        self.sim_process.finished.connect(self.handle_simulation_finished)
+        self.sim_process.errorOccurred.connect(self.handle_simulation_error)
+
+        self.run_btn.setEnabled(False)
+        self.sim_process.start()
+
+    def handle_process_output(self):
+        """读取子进程输出并实时追加到状态面板。"""
+        if not self.sim_process:
+            return
+
+        chunk = bytes(self.sim_process.readAllStandardOutput()).decode('utf-8', errors='replace')
+        if not chunk:
+            return
+
+        self.sim_output_buffer += chunk
+        while '\n' in self.sim_output_buffer:
+            line, self.sim_output_buffer = self.sim_output_buffer.split('\n', 1)
+            line = line.rstrip('\r')
+            if line:
+                self.process_simulation_log_line(line)
+
+    def flush_process_output_buffer(self):
+        """处理未以换行结束的最后一段输出。"""
+        line = self.sim_output_buffer.strip()
+        self.sim_output_buffer = ""
+        if line:
+            self.process_simulation_log_line(line)
+
+    def handle_simulation_finished(self, exit_code, exit_status):
+        """子进程完成后加载结果并刷新界面。"""
+        self.handle_process_output()
+        self.flush_process_output_buffer()
+        self.run_btn.setEnabled(True)
+
         try:
-            nx = self.spin_nx.value()
-            ny = self.spin_ny.value()
-            nz = self.spin_nz.value()
-            lx = self.spin_lx.value()
-            ly = self.spin_ly.value()
-            lz = self.spin_lz.value()
-            
-            num_fracs = self.spin_num_fracs.value()
-            min_len = self.spin_min_len.value()
-            max_len = self.spin_max_len.value()
-            aperture = self.spin_aperture.value()
-            print(f"DEBUG Python: aperture={aperture}, type={type(aperture)}")
-            
-            well_x = self.spin_well_x.value()
-            well_y = self.spin_well_y.value()
-            well_z = self.spin_well_z.value()
-            well_pressure = self.spin_well_pressure.value()
-            
-            self.append_sim_status(f"\nGrid: {nx}x{ny}x{nz}, Domain: {lx}x{ly}x{lz} m")
-            self.append_sim_status(f"Fractures: {num_fracs}, Length: {min_len}-{max_len} m, Aperture: {aperture} m")
-            self.append_sim_status(f"Well: ({well_x}, {well_y}, {well_z}), Pressure: {well_pressure} bar")
-            self.append_sim_status("")
-            
-            if HAS_CPP_MODULE:
-                sim = edfm_core.EDFMSimulator()
-                sim.setGridParameters(nx, ny, nz, lx, ly, lz)
-                # 修正参数: 使用UI中的裂缝开度值
-                sim.setFractureParameters(num_fracs, min_len, max_len, math.pi/3.0, 0.0, math.pi, aperture, 10000.0)
-                sim.setSimulationParameters(100.0, 1.0, 0.2, 0.001, 0.001, 0.0001)
-                # 修正参数: 井半径0.05 (不是0.1)
-                sim.setWellParameters(well_x, well_y, well_z, 0.05, well_pressure)
-                
-                result = sim.runSimulation()
-                self.sim_data.generate_from_cpp(result, nx, ny, nz, lx, ly, lz)
-            else:
-                self.sim_data.generate_mock_data(nx, ny, nz, lx, ly, lz, num_fracs, 
-                                                min_len, max_len, well_x, well_y, well_z, 
-                                                well_pressure)
-            
+            if exit_status != QProcess.NormalExit or exit_code != 0:
+                self.append_sim_status("")
+                self.append_sim_status(f"ERROR: simulation process exited with code {exit_code}")
+                self.status_bar.showMessage("Simulation failed")
+                self.mark_progress_failed()
+                return
+
+            if not self.pending_result_path or not os.path.exists(self.pending_result_path):
+                self.append_sim_status("")
+                self.append_sim_status("ERROR: simulation finished but no result file was produced")
+                self.status_bar.showMessage("Simulation failed")
+                self.mark_progress_failed()
+                return
+
+            self.sim_data.load_json(self.pending_result_path)
             self.append_sim_status("")
             self.append_sim_status("=" * 50)
             self.append_sim_status("  Simulation Completed Successfully!")
             self.append_sim_status("=" * 50)
-            
-            # 渲染
+            self.mark_progress_complete()
+
             self.render_mode3_smooth_pressure()
             self.update_statistics()
-            
-            # 输出边界信息到Simulation Status
-            self.append_sim_status("")
-            self.append_sim_status(f"Visualization:  X[0.00, {lx:.2f}], Y[0.00, {ly:.2f}], Z[0.00, {lz:.2f}]")
-            if self.sim_data.pressure_field:
-                xs = [p[0] for p in self.sim_data.pressure_field]
-                ys = [p[1] for p in self.sim_data.pressure_field]
-                zs = [p[2] for p in self.sim_data.pressure_field]
-                self.append_sim_status(f"Data Range:     X[{min(xs):.2f}, {max(xs):.2f}], Y[{min(ys):.2f}, {max(ys):.2f}], Z[{min(zs):.2f}, {max(zs):.2f}]")
-            if self.sim_data.fractures:
-                frac_xs = []
-                frac_ys = []
-                frac_zs = []
-                for fracture in self.sim_data.fractures:
-                    for p in fracture['points']:
-                        frac_xs.append(p[0])
-                        frac_ys.append(p[1])
-                        frac_zs.append(p[2])
-                self.append_sim_status(f"Fractures:      X[{min(frac_xs):.2f}, {max(frac_xs):.2f}], Y[{min(frac_ys):.2f}, {max(frac_ys):.2f}], Z[{min(frac_zs):.2f}, {max(frac_zs):.2f}]")
-                self.append_sim_status("OK: All fractures within grid boundaries")
-            
-        except Exception as e:
-            self.append_sim_status(f"ERROR: {str(e)}")
-            import traceback
-            self.append_sim_status(traceback.format_exc())
+            self.append_visualization_summary()
+            self.status_bar.showMessage("Simulation completed")
         finally:
-            output_capture.restore()
-        
-        self.status_bar.showMessage("Simulation completed")
+            self.cleanup_simulation_process()
+
+    def handle_simulation_error(self, process_error):
+        """子进程启动/执行异常时记录错误。"""
+        if process_error == QProcess.FailedToStart:
+            self.append_sim_status("ERROR: failed to start simulation process")
+            self.run_btn.setEnabled(True)
+            self.mark_progress_failed()
+            self.cleanup_simulation_process()
+        elif process_error == QProcess.Crashed:
+            self.append_sim_status("ERROR: simulation process crashed")
+            self.mark_progress_failed()
+        self.status_bar.showMessage("Simulation failed")
+
+    def cleanup_simulation_process(self):
+        """清理子进程和临时结果文件。"""
+        if self.pending_result_path and os.path.exists(self.pending_result_path):
+            try:
+                os.remove(self.pending_result_path)
+            except OSError:
+                pass
+        self.pending_result_path = None
+        self.sim_output_buffer = ""
+        if self.sim_process is not None:
+            self.sim_process.deleteLater()
+            self.sim_process = None
+
+    def append_visualization_summary(self):
+        """将当前可视化数据边界追加到状态面板。"""
+        lx = self.sim_data.grid_info['Lx']
+        ly = self.sim_data.grid_info['Ly']
+        lz = self.sim_data.grid_info['Lz']
+
+        self.append_sim_status("")
+        self.append_sim_status(f"Visualization:  X[0.00, {lx:.2f}], Y[0.00, {ly:.2f}], Z[0.00, {lz:.2f}]")
+        if self.sim_data.pressure_field:
+            xs = [p[0] for p in self.sim_data.pressure_field]
+            ys = [p[1] for p in self.sim_data.pressure_field]
+            zs = [p[2] for p in self.sim_data.pressure_field]
+            self.append_sim_status(
+                f"Data Range:     X[{min(xs):.2f}, {max(xs):.2f}], "
+                f"Y[{min(ys):.2f}, {max(ys):.2f}], Z[{min(zs):.2f}, {max(zs):.2f}]"
+            )
+        if self.sim_data.fractures:
+            frac_xs = []
+            frac_ys = []
+            frac_zs = []
+            for fracture in self.sim_data.fractures:
+                for p in fracture['points']:
+                    frac_xs.append(p[0])
+                    frac_ys.append(p[1])
+                    frac_zs.append(p[2])
+            self.append_sim_status(
+                f"Fractures:      X[{min(frac_xs):.2f}, {max(frac_xs):.2f}], "
+                f"Y[{min(frac_ys):.2f}, {max(frac_ys):.2f}], Z[{min(frac_zs):.2f}, {max(frac_zs):.2f}]"
+            )
+            self.append_sim_status("OK: All fractures within grid boundaries")
     
     def render_mode3_smooth_pressure(self):
         """渲染平滑压力场"""
