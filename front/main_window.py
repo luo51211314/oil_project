@@ -98,7 +98,11 @@ class VTKWidget(QWidget):
         self.vtk_widget.GetRenderWindow().AddRenderer(self.renderer)
         self.iren = self.vtk_widget.GetRenderWindow().GetInteractor()
         
-        self.renderer.SetBackground(0.0, 0.0, 0.0)  # 黑色背景
+        self.renderer.SetBackground(0.0, 0.0, 0.0)
+        
+        style = vtk.vtkInteractorStyleTrackballCamera()
+        self.iren.SetInteractorStyle(style)
+        
         self.iren.Initialize()
     
     def reset_camera(self):

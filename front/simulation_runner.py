@@ -55,7 +55,19 @@ def run_simulation(params):
         sim.setSimulationParameters(100.0, 1.0, 0.2, 0.001, 0.001, 0.0001)
         sim.setWellParameters(well_x, well_y, well_z, 0.05, well_pressure)
         result = sim.runSimulation()
-        sim_data.generate_from_cpp(result, nx, ny, nz, lx, ly, lz)
+        grid_lines = sim.getGridLines()
+        interpolated_pressure = sim.getInterpolatedPressureField(50, 25, 10)
+        sim_data.generate_from_cpp(
+            result,
+            nx,
+            ny,
+            nz,
+            lx,
+            ly,
+            lz,
+            grid_lines,
+            interpolated_pressure,
+        )
     else:
         sim_data.generate_mock_data(
             nx, ny, nz, lx, ly, lz,

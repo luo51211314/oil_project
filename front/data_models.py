@@ -40,14 +40,16 @@ class SimulationData:
         self.fractures = []
         self.wells = []
         self.grid_lines = []  # LGR网格线数据
+        self.interpolated_pressure = []  # C++插值后的压力场数据
         
-    def generate_from_cpp(self, sim_result, nx, ny, nz, lx, ly, lz, grid_lines=None):
+    def generate_from_cpp(self, sim_result, nx, ny, nz, lx, ly, lz, grid_lines=None, interpolated_pressure=None):
         """从C++结果生成数据"""
         self.grid_info = {'nx': nx, 'ny': ny, 'nz': nz, 'Lx': lx, 'Ly': ly, 'Lz': lz}
         self.pressure_field = list(sim_result.pressure_field)
         self.temperature_field = list(sim_result.temperature_field) if sim_result.temperature_field else []
         self.stress_field = list(sim_result.stress_field) if sim_result.stress_field else []
         self.grid_lines = list(grid_lines) if grid_lines else []
+        self.interpolated_pressure = list(interpolated_pressure) if interpolated_pressure else []
         
         self.fractures = []
         vertices = list(sim_result.fracture_vertices)

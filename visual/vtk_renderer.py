@@ -29,9 +29,14 @@ class VTKRenderer:
         self.cache['data_hash'] = None
     
     def render_mode3_smooth_pressure(self, sim_data):
-        """渲染平滑压力场"""
+        """渲染平滑压力场 - 使用C++插值数据"""
         renderer = self.renderer
-        field_data = sim_data.pressure_field
+        
+        # 优先使用C++插值数据
+        if sim_data.interpolated_pressure:
+            field_data = sim_data.interpolated_pressure
+        else:
+            field_data = sim_data.pressure_field
         
         if not field_data:
             return
@@ -58,12 +63,11 @@ class VTKRenderer:
         ly = sim_data.grid_info['Ly']
         lz = sim_data.grid_info['Lz']
         
-        min_x, max_x = 0.0, lx
-        min_y, max_y = 0.0, ly
-        min_z, max_z = 0.0, lz
-        
-        # 创建结构化网格
-        nx, ny, nz = 50, 25, 10
+        # 使用C++插值数据时，网格尺寸固定为50x25x10
+        if sim_data.interpolated_pressure:
+            nx, ny, nz = 50, 25, 10
+        else:
+            nx, ny, nz = 50, 25, 10
         
         grid = vtk.vtkStructuredGrid()
         grid.SetDimensions(nx, ny, nz)
@@ -72,29 +76,44 @@ class VTKRenderer:
         pressure_arr = vtk.vtkDoubleArray()
         pressure_arr.SetName("Pressure")
         
-        sorted_field = sorted(field_data, key=lambda p: (p[0], p[1], p[2]))
-        
-        # 创建网格点并插值
-        for k in range(nz):
-            z = min_z + (max_z - min_z) * k / (nz - 1) if nz > 1 else min_z
-            for j in range(ny):
-                y = min_y + (max_y - min_y) * j / (ny - 1) if ny > 1 else min_y
-                for i in range(nx):
-                    x = min_x + (max_x - min_x) * i / (nx - 1) if nx > 1 else min_x
-                    points.InsertNextPoint(x, y, z)
-                    
-                    # 最近邻插值
-                    min_dist = float('inf')
-                    nearest_p = min_p
-                    for fx, fy, fz, fp in sorted_field:
-                        dist = abs(x-fx) + abs(y-fy) + abs(z-fz)
-                        if dist < min_dist:
-                            min_dist = dist
-                            nearest_p = fp
-                            if dist < 1e-6:
-                                break
-                    
-                    pressure_arr.InsertNextValue(nearest_p)
+        # 使用C++插值数据 - 直接填充
+        if sim_data.interpolated_pressure:
+            for x, y, z, p in field_data:
+                points.InsertNextPoint(x, y, z)
+                pressure_arr.InsertNextValue(p)
+        else:
+            # === Python插值代码（已弃用，保留作为回退） ===
+            # sorted_field = sorted(sim_data.pressure_field, key=lambda p: (p[0], p[1], p[2]))
+            # min_x, max_x = 0.0, lx
+            # min_y, max_y = 0.0, ly
+            # min_z, max_z = 0.0, lz
+            # 
+            # for k in range(nz):
+            #     z = min_z + (max_z - min_z) * k / (nz - 1) if nz > 1 else min_z
+            #     for j in range(ny):
+            #         y = min_y + (max_y - min_y) * j / (ny - 1) if ny > 1 else min_y
+            #         for i in range(nx):
+            #             x = min_x + (max_x - min_x) * i / (nx - 1) if nx > 1 else min_x
+            #             points.InsertNextPoint(x, y, z)
+            #             
+            #             # 最近邻插值
+            #             min_dist = float('inf')
+            #             nearest_p = min_p
+            #             for fx, fy, fz, fp in sorted_field:
+            #                 dist = abs(x-fx) + abs(y-fy) + abs(z-fz)
+            #                 if dist < min_dist:
+            #                     min_dist = dist
+            #                     nearest_p = fp
+            #                     if dist < 1e-6:
+            #                         break
+            #             
+            #             pressure_arr.InsertNextValue(nearest_p)
+            # === Python插值代码结束 ===
+            
+            # 回退：直接使用原始压力点
+            for x, y, z, p in field_data:
+                points.InsertNextPoint(x, y, z)
+                pressure_arr.InsertNextValue(p)
         
         grid.SetPoints(points)
         grid.GetPointData().SetScalars(pressure_arr)
