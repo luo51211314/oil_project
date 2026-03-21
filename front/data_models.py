@@ -7,6 +7,13 @@ import io
 import json
 
 
+def _safe_to_list(value):
+    """避免对 numpy/pybind 数组做布尔判断。"""
+    if value is None:
+        return []
+    return list(value)
+
+
 class OutputCapture:
     """捕获C++输出并重定向到Qt界面"""
     def __init__(self, callback):
@@ -46,10 +53,10 @@ class SimulationData:
         """从C++结果生成数据"""
         self.grid_info = {'nx': nx, 'ny': ny, 'nz': nz, 'Lx': lx, 'Ly': ly, 'Lz': lz}
         self.pressure_field = list(sim_result.pressure_field)
-        self.temperature_field = list(sim_result.temperature_field) if sim_result.temperature_field else []
-        self.stress_field = list(sim_result.stress_field) if sim_result.stress_field else []
-        self.grid_lines = list(grid_lines) if grid_lines else []
-        self.interpolated_pressure = list(interpolated_pressure) if interpolated_pressure else []
+        self.temperature_field = _safe_to_list(sim_result.temperature_field)
+        self.stress_field = _safe_to_list(sim_result.stress_field)
+        self.grid_lines = _safe_to_list(grid_lines)
+        self.interpolated_pressure = _safe_to_list(interpolated_pressure)
         
         self.fractures = []
         vertices = list(sim_result.fracture_vertices)
