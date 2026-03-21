@@ -1904,6 +1904,54 @@ public:
         return result;
     }
 
+    std::vector<std::tuple<double,double,double,double>> getInterpolatedPressureField(int nx, int ny, int nz) {
+        std::vector<std::tuple<double,double,double,double>> result;
+        result.reserve(nx * ny * nz);
+        
+        if (n_leaf == 0) {
+            return result;
+        }
+        
+        double min_p = states[0].P;
+        double max_p = states[0].P;
+        for (int i = 0; i < n_leaf; ++i) {
+            min_p = std::min(min_p, states[i].P);
+            max_p = std::max(max_p, states[i].P);
+        }
+        
+        for (int k = 0; k < nz; ++k) {
+            double z = Lz * k / (nz - 1);
+            for (int j = 0; j < ny; ++j) {
+                double y = Ly * j / (ny - 1);
+                for (int i = 0; i < nx; ++i) {
+                    double x = Lx * i / (nx - 1);
+                    
+                    double min_dist = 1e30;
+                    double nearest_p = min_p;
+                    
+                    for (int leaf_idx = 0; leaf_idx < n_leaf; ++leaf_idx) {
+                        double dx = x - leaves[leaf_idx].center.x;
+                        double dy = y - leaves[leaf_idx].center.y;
+                        double dz = z - leaves[leaf_idx].center.z;
+                        double dist = std::abs(dx) + std::abs(dy) + std::abs(dz);
+                        
+                        if (dist < min_dist) {
+                            min_dist = dist;
+                            nearest_p = states[leaf_idx].P;
+                            if (dist < 1e-6) {
+                                break;
+                            }
+                        }
+                    }
+                    
+                    result.push_back(std::make_tuple(x, y, z, nearest_p));
+                }
+            }
+        }
+        
+        return result;
+    }
+
     SimulationResult runSimulation() {
         SimulationResult result;
         std::cout << "=== Simulation Parameters ===" << std::endl;
@@ -1995,5 +2043,6 @@ PYBIND11_MODULE(edfm_core, m) {
         .def("runSimulation", &SimulatorLGR::runSimulation)
         .def("getPressureData", &SimulatorLGR::getPressureData)
         .def("getFractureVertices", &SimulatorLGR::getFractureVertices)
-        .def("getGridLines", &SimulatorLGR::getGridLines);
+        .def("getGridLines", &SimulatorLGR::getGridLines)
+        .def("getInterpolatedPressureField", &SimulatorLGR::getInterpolatedPressureField);
 }

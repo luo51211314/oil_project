@@ -104,7 +104,11 @@ class VTKWidget(QWidget):
         self.vtk_widget.GetRenderWindow().AddRenderer(self.renderer)
         self.iren = self.vtk_widget.GetRenderWindow().GetInteractor()
         
-        self.renderer.SetBackground(0.0, 0.0, 0.0)  # 黑色背景
+        self.renderer.SetBackground(0.0, 0.0, 0.0)
+        
+        style = vtk.vtkInteractorStyleTrackballCamera()
+        self.iren.SetInteractorStyle(style)
+        
         self.iren.Initialize()
     
     def reset_camera(self):
@@ -673,7 +677,8 @@ class MainWindow(QMainWindow):
                 
                 result = sim.runSimulation()
                 grid_lines = sim.getGridLines()
-                self.sim_data.generate_from_cpp(result, nx, ny, nz, lx, ly, lz, grid_lines)
+                interpolated_pressure = sim.getInterpolatedPressureField(50, 25, 10)
+                self.sim_data.generate_from_cpp(result, nx, ny, nz, lx, ly, lz, grid_lines, interpolated_pressure)
             else:
                 self.sim_data.generate_mock_data(nx, ny, nz, lx, ly, lz, num_fracs, 
                                                 min_len, max_len, well_x, well_y, well_z, 
