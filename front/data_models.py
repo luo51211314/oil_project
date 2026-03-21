@@ -120,6 +120,8 @@ class SimulationData:
             'pressure_field': [list(point) for point in self.pressure_field],
             'temperature_field': [list(point) for point in self.temperature_field],
             'stress_field': [list(point) for point in self.stress_field],
+            'grid_lines': [list(line) for line in self.grid_lines],
+            'interpolated_pressure': [list(point) for point in self.interpolated_pressure],
             'fractures': [
                 {
                     'id': fracture.get('id'),
@@ -136,6 +138,10 @@ class SimulationData:
         self.pressure_field = [tuple(point) for point in payload.get('pressure_field', [])]
         self.temperature_field = [tuple(point) for point in payload.get('temperature_field', [])]
         self.stress_field = [tuple(point) for point in payload.get('stress_field', [])]
+        self.grid_lines = [tuple(line) for line in payload.get('grid_lines', [])]
+        self.interpolated_pressure = [
+            tuple(point) for point in payload.get('interpolated_pressure', [])
+        ]
         self.fractures = [
             {
                 'id': fracture.get('id'),

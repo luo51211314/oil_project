@@ -389,7 +389,7 @@ class MainWindow(QMainWindow):
         self.grid_param_stack.addWidget(self.grid_refined_page)
         layout.addWidget(self.grid_param_stack, 1)
 
-        self.combo_grid_refinement.setCurrentText("加密")
+        self.combo_grid_refinement.setCurrentText("不加密")
         self.update_parameter_mode(self.combo_grid_refinement.currentText())
         layout.addStretch()
         
@@ -402,12 +402,12 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        self.basic_spin_nx = self.create_spinbox(1, 500, 150)
-        self.basic_spin_ny = self.create_spinbox(1, 200, 15)
+        self.basic_spin_nx = self.create_spinbox(1, 500, 20)
+        self.basic_spin_ny = self.create_spinbox(1, 200, 10)
         self.basic_spin_nz = self.create_spinbox(1, 100, 2)
-        self.basic_spin_lx = self.create_double_spinbox(1, 100000, 3000, decimals=1)
-        self.basic_spin_ly = self.create_double_spinbox(1, 100000, 300, decimals=1)
-        self.basic_spin_lz = self.create_double_spinbox(1, 10000, 40, decimals=1)
+        self.basic_spin_lx = self.create_double_spinbox(1, 100000, 1000, decimals=1)
+        self.basic_spin_ly = self.create_double_spinbox(1, 100000, 500, decimals=1)
+        self.basic_spin_lz = self.create_double_spinbox(1, 10000, 50, decimals=1)
         layout.addWidget(self.create_parameter_group("Grid Parameters", [
             ("Nx:", self.basic_spin_nx),
             ("Ny:", self.basic_spin_ny),
@@ -475,12 +475,12 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        self.refined_spin_nx = self.create_spinbox(1, 500, 100)
-        self.refined_spin_ny = self.create_spinbox(1, 500, 50)
-        self.refined_spin_nz = self.create_spinbox(1, 200, 10)
+        self.refined_spin_nx = self.create_spinbox(1, 500, 20)
+        self.refined_spin_ny = self.create_spinbox(1, 500, 10)
+        self.refined_spin_nz = self.create_spinbox(1, 200, 2)
         self.refined_spin_lx = self.create_double_spinbox(1, 100000, 1000, decimals=1)
         self.refined_spin_ly = self.create_double_spinbox(1, 100000, 500, decimals=1)
-        self.refined_spin_lz = self.create_double_spinbox(1, 10000, 100, decimals=1)
+        self.refined_spin_lz = self.create_double_spinbox(1, 10000, 50, decimals=1)
         layout.addWidget(self.create_parameter_group("Grid Parameters", [
             ("Nx:", self.refined_spin_nx),
             ("Ny:", self.refined_spin_ny),
@@ -722,9 +722,9 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        self.basic_spin_well_x = self.create_double_spinbox(0.0, 100000.0, 1500.0, decimals=2)
-        self.basic_spin_well_y = self.create_double_spinbox(0.0, 100000.0, 150.0, decimals=2)
-        self.basic_spin_well_z = self.create_double_spinbox(0.0, 10000.0, 20.0, decimals=2)
+        self.basic_spin_well_x = self.create_double_spinbox(0.0, 100000.0, 250.0, decimals=2)
+        self.basic_spin_well_y = self.create_double_spinbox(0.0, 100000.0, 250.0, decimals=2)
+        self.basic_spin_well_z = self.create_double_spinbox(0.0, 10000.0, 50.0, decimals=2)
         self.basic_spin_well_pressure = self.create_double_spinbox(0.0, 100000.0, 50.0, decimals=2)
         self.basic_spin_well_radius = self.create_double_spinbox(0.001, 100.0, 0.05, decimals=3)
         layout.addWidget(self.create_parameter_group("Well Parameters", [
@@ -865,13 +865,13 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        self.basic_spin_num_fracs = self.create_spinbox(0, 500, 60)
+        self.basic_spin_num_fracs = self.create_spinbox(0, 500, 100)
         self.basic_spin_min_len = self.create_double_spinbox(0.0, 100000.0, 30.0, decimals=2)
         self.basic_spin_max_len = self.create_double_spinbox(0.0, 100000.0, 80.0, decimals=2)
         self.basic_spin_max_dip = self.create_double_spinbox(0.0, math.pi, math.pi / 3.0, decimals=4)
         self.basic_spin_min_strike = self.create_double_spinbox(0.0, 2 * math.pi, 0.0, decimals=4)
         self.basic_spin_max_strike = self.create_double_spinbox(0.0, 2 * math.pi, math.pi, decimals=4)
-        self.basic_spin_aperture = self.create_double_spinbox(0.0, 10.0, 0.01, decimals=4)
+        self.basic_spin_aperture = self.create_double_spinbox(0.0, 10.0, 0.001, decimals=4)
         self.basic_spin_frac_perm = self.create_double_spinbox(0.0, 1000000.0, 1000.0, decimals=2)
         layout.addWidget(self.create_parameter_group("Natural Fractures", [
             ("Num Fractures:", self.basic_spin_num_fracs),

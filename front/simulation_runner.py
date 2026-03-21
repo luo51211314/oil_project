@@ -55,8 +55,16 @@ def run_simulation(params):
         sim.setSimulationParameters(100.0, 1.0, 0.2, 0.001, 0.001, 0.0001)
         sim.setWellParameters(well_x, well_y, well_z, 0.05, well_pressure)
         result = sim.runSimulation()
-        grid_lines = sim.getGridLines()
-        interpolated_pressure = sim.getInterpolatedPressureField(50, 25, 10)
+        grid_lines = []
+        interpolated_pressure = []
+        if hasattr(sim, 'getGridLines'):
+            grid_lines = sim.getGridLines()
+        else:
+            print("WARNING: edfm_core missing getGridLines(); using coarse grid visualization")
+        if hasattr(sim, 'getInterpolatedPressureField'):
+            interpolated_pressure = sim.getInterpolatedPressureField(50, 25, 10)
+        else:
+            print("WARNING: edfm_core missing getInterpolatedPressureField(); using Python fallback interpolation")
         sim_data.generate_from_cpp(
             result,
             nx,
@@ -68,6 +76,8 @@ def run_simulation(params):
             grid_lines,
             interpolated_pressure,
         )
+        if not sim_data.interpolated_pressure:
+            sim_data.interpolated_pressure = build_interpolated_pressure_from_leaf_data(sim_data)
     else:
         sim_data.generate_mock_data(
             nx, ny, nz, lx, ly, lz,
@@ -76,6 +86,35 @@ def run_simulation(params):
         )
 
     return sim_data
+
+
+def build_interpolated_pressure_from_leaf_data(sim_data, nx=50, ny=25, nz=10):
+    """旧版 edfm_core 缺少插值接口时，使用最近邻生成规则压力场。"""
+    field_data = sim_data.pressure_field
+    if not field_data:
+        return []
+
+    lx = float(sim_data.grid_info['Lx'])
+    ly = float(sim_data.grid_info['Ly'])
+    lz = float(sim_data.grid_info['Lz'])
+
+    interpolated = []
+    for k in range(nz):
+        z = lz * k / (nz - 1) if nz > 1 else 0.0
+        for j in range(ny):
+            y = ly * j / (ny - 1) if ny > 1 else 0.0
+            for i in range(nx):
+                x = lx * i / (nx - 1) if nx > 1 else 0.0
+                nearest = min(
+                    field_data,
+                    key=lambda point: (
+                        (point[0] - x) * (point[0] - x)
+                        + (point[1] - y) * (point[1] - y)
+                        + (point[2] - z) * (point[2] - z)
+                    ),
+                )
+                interpolated.append((x, y, z, nearest[3]))
+    return interpolated
 
 
 def main():
