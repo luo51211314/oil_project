@@ -48,6 +48,7 @@
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <pybind11/numpy.h>
 
 namespace py = pybind11;
 
@@ -407,11 +408,11 @@ PropertiesT<T> getProps(const StateT<T>& s) {
 // =============================================================================
 
 struct SimulationResult {
-    std::vector<std::tuple<double,double,double,double>> pressure_field;
-    std::vector<std::tuple<double,double,double,double>> temperature_field;
-    std::vector<std::tuple<double,double,double,double>> stress_field;
-    std::vector<std::tuple<double,double,double,double>> fracture_vertices;
-    std::vector<std::tuple<int,int,int,int>> fracture_cells;
+    py::array_t<double> pressure_field;
+    py::array_t<double> temperature_field;
+    py::array_t<double> stress_field;
+    py::array_t<double> fracture_vertices;
+    py::array_t<int> fracture_cells;
 };
 
 // =============================================================================
@@ -1846,36 +1847,40 @@ public:
         perm_z_ = perm_z;
     }
     
-    std::vector<std::tuple<double,double,double,double>> getPressureData() {
-        std::vector<std::tuple<double,double,double,double>> result;
+    py::array_t<double> getPressureData() {
+        py::array_t<double> result({n_leaf, 4});
+        auto r = result.mutable_unchecked<2>();
         for (int i = 0; i < n_leaf; ++i) {
-            result.push_back(std::make_tuple(
-                leaves[i].center.x,
-                leaves[i].center.y,
-                leaves[i].center.z,
-                states[i].P
-            ));
+            r(i, 0) = leaves[i].center.x;
+            r(i, 1) = leaves[i].center.y;
+            r(i, 2) = leaves[i].center.z;
+            r(i, 3) = states[i].P;
         }
         return result;
     }
     
-    std::vector<std::tuple<double,double,double,double>> getFractureVertices() {
-        std::vector<std::tuple<double,double,double,double>> result;
+    py::array_t<double> getFractureVertices() {
+        int num_verts = fractures.size() * 4;
+        py::array_t<double> result({num_verts, 4});
+        auto r = result.mutable_unchecked<2>();
+        int row = 0;
         for (const auto& f : fractures) {
             for (int i = 0; i < 4; ++i) {
-                result.push_back(std::make_tuple(
-                    f.vertices[i].x,
-                    f.vertices[i].y,
-                    f.vertices[i].z,
-                    (double)f.id
-                ));
+                r(row, 0) = f.vertices[i].x;
+                r(row, 1) = f.vertices[i].y;
+                r(row, 2) = f.vertices[i].z;
+                r(row, 3) = (double)f.id;
+                row++;
             }
         }
         return result;
     }
 
-    std::vector<std::tuple<double,double,double,double,double,double>> getGridLines() {
-        std::vector<std::tuple<double,double,double,double,double,double>> result;
+    py::array_t<double> getGridLines() {
+        int num_lines = n_leaf * 12;
+        py::array_t<double> result({num_lines, 6});
+        auto r = result.mutable_unchecked<2>();
+        int row = 0;
         for (int i = 0; i < n_leaf; ++i) {
             const auto& leaf = leaves[i];
             double x_min = leaf.center.x - leaf.dx * 0.5;
@@ -1885,21 +1890,20 @@ public:
             double z_min = leaf.center.z - leaf.dz * 0.5;
             double z_max = leaf.center.z + leaf.dz * 0.5;
 
-            // 12条边: (x_min,y_min,z_min)-(x_max,y_min,z_min)
-            result.push_back(std::make_tuple(x_min, y_min, z_min, x_max, y_min, z_min));
-            result.push_back(std::make_tuple(x_min, y_max, z_min, x_max, y_max, z_min));
-            result.push_back(std::make_tuple(x_min, y_min, z_max, x_max, y_min, z_max));
-            result.push_back(std::make_tuple(x_min, y_max, z_max, x_max, y_max, z_max));
+            r(row, 0) = x_min; r(row, 1) = y_min; r(row, 2) = z_min; r(row, 3) = x_max; r(row, 4) = y_min; r(row, 5) = z_min; row++;
+            r(row, 0) = x_min; r(row, 1) = y_max; r(row, 2) = z_min; r(row, 3) = x_max; r(row, 4) = y_max; r(row, 5) = z_min; row++;
+            r(row, 0) = x_min; r(row, 1) = y_min; r(row, 2) = z_max; r(row, 3) = x_max; r(row, 4) = y_min; r(row, 5) = z_max; row++;
+            r(row, 0) = x_min; r(row, 1) = y_max; r(row, 2) = z_max; r(row, 3) = x_max; r(row, 4) = y_max; r(row, 5) = z_max; row++;
 
-            result.push_back(std::make_tuple(x_min, y_min, z_min, x_min, y_max, z_min));
-            result.push_back(std::make_tuple(x_max, y_min, z_min, x_max, y_max, z_min));
-            result.push_back(std::make_tuple(x_min, y_min, z_max, x_min, y_max, z_max));
-            result.push_back(std::make_tuple(x_max, y_min, z_max, x_max, y_max, z_max));
+            r(row, 0) = x_min; r(row, 1) = y_min; r(row, 2) = z_min; r(row, 3) = x_min; r(row, 4) = y_max; r(row, 5) = z_min; row++;
+            r(row, 0) = x_max; r(row, 1) = y_min; r(row, 2) = z_min; r(row, 3) = x_max; r(row, 4) = y_max; r(row, 5) = z_min; row++;
+            r(row, 0) = x_min; r(row, 1) = y_min; r(row, 2) = z_max; r(row, 3) = x_min; r(row, 4) = y_max; r(row, 5) = z_max; row++;
+            r(row, 0) = x_max; r(row, 1) = y_min; r(row, 2) = z_max; r(row, 3) = x_max; r(row, 4) = y_max; r(row, 5) = z_max; row++;
 
-            result.push_back(std::make_tuple(x_min, y_min, z_min, x_min, y_min, z_max));
-            result.push_back(std::make_tuple(x_max, y_min, z_min, x_max, y_min, z_max));
-            result.push_back(std::make_tuple(x_min, y_max, z_min, x_min, y_max, z_max));
-            result.push_back(std::make_tuple(x_max, y_max, z_min, x_max, y_max, z_max));
+            r(row, 0) = x_min; r(row, 1) = y_min; r(row, 2) = z_min; r(row, 3) = x_min; r(row, 4) = y_min; r(row, 5) = z_max; row++;
+            r(row, 0) = x_max; r(row, 1) = y_min; r(row, 2) = z_min; r(row, 3) = x_max; r(row, 4) = y_min; r(row, 5) = z_max; row++;
+            r(row, 0) = x_min; r(row, 1) = y_max; r(row, 2) = z_min; r(row, 3) = x_min; r(row, 4) = y_max; r(row, 5) = z_max; row++;
+            r(row, 0) = x_max; r(row, 1) = y_max; r(row, 2) = z_min; r(row, 3) = x_max; r(row, 4) = y_max; r(row, 5) = z_max; row++;
         }
         return result;
     }
@@ -1983,25 +1987,8 @@ public:
         avgP /= n_leaf;
         std::cout << "Final pressure range: min=" << minP << " max=" << maxP << " avg=" << avgP << " bar" << std::endl;
         
-        for (int i = 0; i < n_leaf; ++i) {
-            result.pressure_field.push_back(std::make_tuple(
-                leaves[i].center.x,
-                leaves[i].center.y,
-                leaves[i].center.z,
-                states[i].P
-            ));
-        }
-        
-        for (const auto& f : fractures) {
-            for (int i = 0; i < 4; ++i) {
-                result.fracture_vertices.push_back(std::make_tuple(
-                    f.vertices[i].x,
-                    f.vertices[i].y,
-                    f.vertices[i].z,
-                    (double)f.id
-                ));
-            }
-        }
+        result.pressure_field = getPressureData();
+        result.fracture_vertices = getFractureVertices();
         
         return result;
     }

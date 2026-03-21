@@ -74,21 +74,23 @@ pip install pybind11
 
 ## 构建C++模块
 
-### Windows (Visual Studio)
+### Windows 
 
-```bash
-# 进入构建目录
+#### 使用 MSVC (Visual Studio) 编译
+# 进入项目目录
+cd D:\c++code\oil_project
+
+# 创建并进入构建文件夹
+rmdir /s /q build  # 清理旧缓存（重要）
 mkdir build
 cd build
 
-# 使用CMake配置
-cmake .. -DCMAKE_BUILD_TYPE=Release
+# CMake 配置（自动使用 MSVC + NMake）
+cmake .. -DCMAKE_BUILD_TYPE=Release -G "NMake Makefiles"
 
-# 构建
-cmake --build . --config Release
-```
+# 开始编译
+cmake --build .
 
-编译后的模块 `edfm_core.pyd` 将生成在 `build/Release/` 目录中。
 
 ### Linux/Mac
 
