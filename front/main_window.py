@@ -5,6 +5,7 @@
 import sys
 import os
 import json
+import math
 import re
 import tempfile
 
@@ -12,7 +13,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QLabel, QPushButton, QSplitter, QFrame, QToolBar, QAction,
                              QStatusBar, QTabWidget, QStackedWidget, QTextEdit, QGroupBox,
                              QTableWidget, QSpinBox, QDoubleSpinBox, QGridLayout, QComboBox,
-                             QProgressBar,
+                             QProgressBar, QScrollArea,
                              QCheckBox, QTableWidgetItem)
 from PyQt5.QtCore import Qt, QSize, QProcess
 from PyQt5.QtGui import QIcon, QFont, QColor, QPixmap, QPainter
@@ -126,6 +127,8 @@ class MainWindow(QMainWindow):
         self.current_progress_step = 0
         self.estimated_total_steps = 700
         self.pending_step_summary = False
+        self.default_grid_type = "corner_point"
+        self.show_grid_type_selector = False
         
         # 缓存VTK对象，避免重复生成
         self.cache = {
@@ -344,208 +347,594 @@ class MainWindow(QMainWindow):
         self.left_layout.addWidget(self.param_stack)
     
     def create_grid_page(self):
-        """创建Grid参数页面 - 与原文件一致"""
+        """创建Grid参数页面，支持加密/不加密两套参数面板切换。"""
         page = QWidget()
         page.setStyleSheet("background-color: #2b2b2b;")
         layout = QVBoxLayout(page)
         layout.setContentsMargins(10, 10, 10, 10)
-        
-        group = QGroupBox("Grid Parameters")
-        group.setStyleSheet(self.groupbox_style())
-        grid = QGridLayout()
-        
-        # 与原始算法CSV一致 (20x10x2, 1000x500x50)
-        self.spin_nx = QSpinBox()
-        self.spin_nx.setRange(1, 200)
-        self.spin_nx.setValue(20)
-        self.spin_ny = QSpinBox()
-        self.spin_ny.setRange(1, 100)
-        self.spin_ny.setValue(10)
-        self.spin_nz = QSpinBox()
-        self.spin_nz.setRange(1, 50)
-        self.spin_nz.setValue(2)
-        
-        # 域大小与原始算法CSV一致
-        self.spin_lx = QDoubleSpinBox()
-        self.spin_lx.setRange(1, 10000)
-        self.spin_lx.setValue(1000)
-        self.spin_ly = QDoubleSpinBox()
-        self.spin_ly.setRange(1, 10000)
-        self.spin_ly.setValue(500)
-        self.spin_lz = QDoubleSpinBox()
-        self.spin_lz.setRange(1, 1000)
-        self.spin_lz.setValue(50)
-        
-        grid.addWidget(QLabel("Nx:"), 0, 0)
-        grid.addWidget(self.spin_nx, 0, 1)
-        grid.addWidget(QLabel("Ny:"), 1, 0)
-        grid.addWidget(self.spin_ny, 1, 1)
-        grid.addWidget(QLabel("Nz:"), 2, 0)
-        grid.addWidget(self.spin_nz, 2, 1)
-        grid.addWidget(QLabel("Lx (m):"), 3, 0)
-        grid.addWidget(self.spin_lx, 3, 1)
-        grid.addWidget(QLabel("Ly (m):"), 4, 0)
-        grid.addWidget(self.spin_ly, 4, 1)
-        grid.addWidget(QLabel("Lz (m):"), 5, 0)
-        grid.addWidget(self.spin_lz, 5, 1)
-        
-        group.setLayout(grid)
-        layout.addWidget(group)
+
+        options_group = QGroupBox("Grid Options")
+        options_group.setStyleSheet(self.groupbox_style())
+        options_layout = QGridLayout()
+
+        self.combo_grid_refinement = QComboBox()
+        self.combo_grid_refinement.addItems(["不加密", "加密"])
+        self.combo_grid_refinement.setStyleSheet("color: #cccccc; background-color: #3d3d3d;")
+        self.combo_grid_refinement.currentTextChanged.connect(self.update_parameter_mode)
+
+        # Keep a hidden backup interface for future grid-type switching.
+        self.combo_grid_type = QComboBox()
+        self.combo_grid_type.addItem("角格", "corner_point")
+        self.combo_grid_type.addItem("网格", "cartesian")
+        self.combo_grid_type.setCurrentIndex(0)
+        self.combo_grid_type.setStyleSheet("color: #cccccc; background-color: #3d3d3d;")
+
+        options_layout.addWidget(QLabel("是否加密:"), 0, 0)
+        options_layout.addWidget(self.combo_grid_refinement, 0, 1)
+        if self.show_grid_type_selector:
+            options_layout.addWidget(QLabel("网格类型:"), 1, 0)
+            options_layout.addWidget(self.combo_grid_type, 1, 1)
+
+        options_group.setLayout(options_layout)
+        layout.addWidget(options_group)
+
+        self.grid_param_stack = QStackedWidget()
+        self.grid_unrefined_page = self.create_unrefined_grid_params_page()
+        self.grid_refined_page = self.create_refined_grid_params_page()
+        self.grid_param_stack.addWidget(self.grid_unrefined_page)
+        self.grid_param_stack.addWidget(self.grid_refined_page)
+        layout.addWidget(self.grid_param_stack, 1)
+
+        self.combo_grid_refinement.setCurrentText("加密")
+        self.update_parameter_mode(self.combo_grid_refinement.currentText())
         layout.addStretch()
         
         return page
+
+    def create_unrefined_grid_params_page(self):
+        """未加密角格参数面板，默认值以源码为准。"""
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        self.basic_spin_nx = self.create_spinbox(1, 500, 150)
+        self.basic_spin_ny = self.create_spinbox(1, 200, 15)
+        self.basic_spin_nz = self.create_spinbox(1, 100, 2)
+        self.basic_spin_lx = self.create_double_spinbox(1, 100000, 3000, decimals=1)
+        self.basic_spin_ly = self.create_double_spinbox(1, 100000, 300, decimals=1)
+        self.basic_spin_lz = self.create_double_spinbox(1, 10000, 40, decimals=1)
+        layout.addWidget(self.create_parameter_group("Grid Parameters", [
+            ("Nx:", self.basic_spin_nx),
+            ("Ny:", self.basic_spin_ny),
+            ("Nz:", self.basic_spin_nz),
+            ("Lx (m):", self.basic_spin_lx),
+            ("Ly (m):", self.basic_spin_ly),
+            ("Lz (m):", self.basic_spin_lz),
+        ]))
+
+        self.basic_spin_porosity = self.create_double_spinbox(0.0, 1.0, 0.04, decimals=4)
+        self.basic_spin_perm_x = self.create_double_spinbox(0.0, 1000000, 0.005, decimals=6)
+        self.basic_spin_perm_y = self.create_double_spinbox(0.0, 1000000, 0.005, decimals=6)
+        self.basic_spin_perm_z = self.create_double_spinbox(0.0, 1000000, 0.005, decimals=6)
+        layout.addWidget(self.create_parameter_group("Matrix Properties", [
+            ("Porosity:", self.basic_spin_porosity),
+            ("Kx (Darcy):", self.basic_spin_perm_x),
+            ("Ky (Darcy):", self.basic_spin_perm_y),
+            ("Kz (Darcy):", self.basic_spin_perm_z),
+        ]))
+
+        self.basic_spin_initial_pressure = self.create_double_spinbox(0.0, 1000000, 800.0, decimals=2)
+        self.basic_spin_initial_sw = self.create_double_spinbox(0.0, 1.0, 0.05, decimals=4)
+        self.basic_spin_initial_sg = self.create_double_spinbox(0.0, 1.0, 0.9, decimals=4)
+        layout.addWidget(self.create_parameter_group("Initial State", [
+            ("Pressure (bar):", self.basic_spin_initial_pressure),
+            ("Sw:", self.basic_spin_initial_sw),
+            ("Sg:", self.basic_spin_initial_sg),
+        ]))
+
+        self.basic_spin_mu_w = self.create_double_spinbox(0.0, 1000.0, 1.0, decimals=4)
+        self.basic_spin_mu_o = self.create_double_spinbox(0.0, 1000.0, 5.0, decimals=4)
+        self.basic_spin_mu_g = self.create_double_spinbox(0.0, 1000.0, 0.2, decimals=4)
+        self.basic_spin_cw = self.create_double_spinbox(0.0, 1.0, 1e-8, decimals=8, step=1e-8)
+        self.basic_spin_co = self.create_double_spinbox(0.0, 1.0, 1e-5, decimals=8, step=1e-6)
+        self.basic_spin_cg = self.create_double_spinbox(0.0, 1.0, 1e-3, decimals=6, step=1e-4)
+        self.basic_spin_p_ref = self.create_double_spinbox(0.0, 1000000, 100.0, decimals=2)
+        self.basic_spin_swi = self.create_double_spinbox(0.0, 1.0, 0.05, decimals=4)
+        self.basic_spin_sor = self.create_double_spinbox(0.0, 1.0, 0.01, decimals=4)
+        self.basic_spin_sgc = self.create_double_spinbox(0.0, 1.0, 0.05, decimals=4)
+        layout.addWidget(self.create_parameter_group("Fluid Properties", [
+            ("mu_w (cP):", self.basic_spin_mu_w),
+            ("mu_o (cP):", self.basic_spin_mu_o),
+            ("mu_g (cP):", self.basic_spin_mu_g),
+            ("cw (1/bar):", self.basic_spin_cw),
+            ("co (1/bar):", self.basic_spin_co),
+            ("cg (1/bar):", self.basic_spin_cg),
+            ("P_ref (bar):", self.basic_spin_p_ref),
+            ("Swi:", self.basic_spin_swi),
+            ("Sor:", self.basic_spin_sor),
+            ("Sgc:", self.basic_spin_sgc),
+        ]))
+
+        self.basic_spin_simulation_time = self.create_double_spinbox(0.0, 1000000, 100.0, decimals=2)
+        layout.addWidget(self.create_parameter_group("Simulation Control", [
+            ("Simulation Time (days):", self.basic_spin_simulation_time),
+        ]))
+        layout.addStretch()
+
+        return self.wrap_in_scroll_area(content)
+
+    def create_refined_grid_params_page(self):
+        """加密角格参数面板，默认值以源码为准。"""
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        self.refined_spin_nx = self.create_spinbox(1, 500, 100)
+        self.refined_spin_ny = self.create_spinbox(1, 500, 50)
+        self.refined_spin_nz = self.create_spinbox(1, 200, 10)
+        self.refined_spin_lx = self.create_double_spinbox(1, 100000, 1000, decimals=1)
+        self.refined_spin_ly = self.create_double_spinbox(1, 100000, 500, decimals=1)
+        self.refined_spin_lz = self.create_double_spinbox(1, 10000, 100, decimals=1)
+        layout.addWidget(self.create_parameter_group("Grid Parameters", [
+            ("Nx:", self.refined_spin_nx),
+            ("Ny:", self.refined_spin_ny),
+            ("Nz:", self.refined_spin_nz),
+            ("Lx (m):", self.refined_spin_lx),
+            ("Ly (m):", self.refined_spin_ly),
+            ("Lz (m):", self.refined_spin_lz),
+        ]))
+
+        self.check_enable_lgr = QCheckBox("启用加密")
+        self.check_enable_lgr.setChecked(True)
+        self.refined_spin_d_threshold = self.create_double_spinbox(0.0, 10000.0, 30.0, decimals=2)
+        self.refined_spin_lgr_nrx = self.create_spinbox(1, 20, 2)
+        self.refined_spin_lgr_nry = self.create_spinbox(1, 20, 2)
+        self.refined_spin_lgr_nrz = self.create_spinbox(1, 20, 2)
+        lgr_group = QGroupBox("Refinement Settings")
+        lgr_group.setStyleSheet(self.groupbox_style())
+        lgr_layout = QGridLayout()
+        lgr_layout.addWidget(self.check_enable_lgr, 0, 0, 1, 2)
+        lgr_layout.addWidget(QLabel("Threshold (m):"), 1, 0)
+        lgr_layout.addWidget(self.refined_spin_d_threshold, 1, 1)
+        lgr_layout.addWidget(QLabel("Refine X:"), 2, 0)
+        lgr_layout.addWidget(self.refined_spin_lgr_nrx, 2, 1)
+        lgr_layout.addWidget(QLabel("Refine Y:"), 3, 0)
+        lgr_layout.addWidget(self.refined_spin_lgr_nry, 3, 1)
+        lgr_layout.addWidget(QLabel("Refine Z:"), 4, 0)
+        lgr_layout.addWidget(self.refined_spin_lgr_nrz, 4, 1)
+        lgr_group.setLayout(lgr_layout)
+        layout.addWidget(lgr_group)
+
+        self.refined_spin_porosity = self.create_double_spinbox(0.0, 1.0, 0.2, decimals=4)
+        self.refined_spin_perm_x = self.create_double_spinbox(0.0, 1000000, 0.001, decimals=6)
+        self.refined_spin_perm_y = self.create_double_spinbox(0.0, 1000000, 0.001, decimals=6)
+        self.refined_spin_perm_z = self.create_double_spinbox(0.0, 1000000, 0.0001, decimals=6)
+        layout.addWidget(self.create_parameter_group("Matrix Properties", [
+            ("Porosity:", self.refined_spin_porosity),
+            ("Kx (Darcy):", self.refined_spin_perm_x),
+            ("Ky (Darcy):", self.refined_spin_perm_y),
+            ("Kz (Darcy):", self.refined_spin_perm_z),
+        ]))
+
+        self.refined_spin_initial_pressure = self.create_double_spinbox(0.0, 1000000, 200.0, decimals=2)
+        self.refined_spin_initial_sw = self.create_double_spinbox(0.0, 1.0, 0.2, decimals=4)
+        self.refined_spin_initial_sg = self.create_double_spinbox(0.0, 1.0, 0.05, decimals=4)
+        layout.addWidget(self.create_parameter_group("Initial State", [
+            ("Pressure (bar):", self.refined_spin_initial_pressure),
+            ("Sw:", self.refined_spin_initial_sw),
+            ("Sg:", self.refined_spin_initial_sg),
+        ]))
+
+        self.refined_spin_mu_w = self.create_double_spinbox(0.0, 1000.0, 1.0, decimals=4)
+        self.refined_spin_mu_o = self.create_double_spinbox(0.0, 1000.0, 5.0, decimals=4)
+        self.refined_spin_mu_g = self.create_double_spinbox(0.0, 1000.0, 0.2, decimals=4)
+        self.refined_spin_cw = self.create_double_spinbox(0.0, 1.0, 1e-8, decimals=8, step=1e-8)
+        self.refined_spin_co = self.create_double_spinbox(0.0, 1.0, 1e-5, decimals=8, step=1e-6)
+        self.refined_spin_cg = self.create_double_spinbox(0.0, 1.0, 1e-3, decimals=6, step=1e-4)
+        self.refined_spin_p_ref = self.create_double_spinbox(0.0, 1000000, 100.0, decimals=2)
+        self.refined_spin_swi = self.create_double_spinbox(0.0, 1.0, 0.2, decimals=4)
+        self.refined_spin_sor = self.create_double_spinbox(0.0, 1.0, 0.2, decimals=4)
+        self.refined_spin_sgc = self.create_double_spinbox(0.0, 1.0, 0.05, decimals=4)
+        layout.addWidget(self.create_parameter_group("Fluid Properties", [
+            ("mu_w (cP):", self.refined_spin_mu_w),
+            ("mu_o (cP):", self.refined_spin_mu_o),
+            ("mu_g (cP):", self.refined_spin_mu_g),
+            ("cw (1/bar):", self.refined_spin_cw),
+            ("co (1/bar):", self.refined_spin_co),
+            ("cg (1/bar):", self.refined_spin_cg),
+            ("P_ref (bar):", self.refined_spin_p_ref),
+            ("Swi:", self.refined_spin_swi),
+            ("Sor:", self.refined_spin_sor),
+            ("Sgc:", self.refined_spin_sgc),
+        ]))
+
+        self.refined_spin_simulation_time = self.create_double_spinbox(0.0, 1000000, 100.0, decimals=2)
+        self.refined_spin_time_step = self.create_double_spinbox(0.0, 1000000, 1.0, decimals=4)
+        layout.addWidget(self.create_parameter_group("Simulation Control", [
+            ("Simulation Time (days):", self.refined_spin_simulation_time),
+            ("Time Step (days):", self.refined_spin_time_step),
+        ]))
+        layout.addStretch()
+
+        return self.wrap_in_scroll_area(content)
+
+    def create_parameter_group(self, title, fields):
+        """创建统一风格的参数分组。"""
+        group = QGroupBox(title)
+        group.setStyleSheet(self.groupbox_style())
+        grid = QGridLayout()
+        for row, (label, widget) in enumerate(fields):
+            grid.addWidget(QLabel(label), row, 0)
+            grid.addWidget(widget, row, 1)
+        group.setLayout(grid)
+        return group
+
+    def create_spinbox(self, minimum, maximum, value):
+        spin = QSpinBox()
+        spin.setRange(minimum, maximum)
+        spin.setValue(value)
+        return spin
+
+    def create_double_spinbox(self, minimum, maximum, value, decimals=2, step=None):
+        spin = QDoubleSpinBox()
+        spin.setRange(minimum, maximum)
+        spin.setDecimals(decimals)
+        spin.setValue(value)
+        if step is not None:
+            spin.setSingleStep(step)
+        return spin
+
+    def wrap_in_scroll_area(self, widget):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setWidget(widget)
+        return scroll
+
+    def update_grid_parameter_panel(self, refinement_text):
+        """根据是否加密切换整套参数面板。"""
+        if refinement_text == "加密":
+            self.grid_param_stack.setCurrentWidget(self.grid_refined_page)
+        else:
+            self.grid_param_stack.setCurrentWidget(self.grid_unrefined_page)
+
+    def update_wells_parameter_panel(self, refinement_text):
+        """根据是否加密切换 Wells 参数面板。"""
+        if hasattr(self, 'wells_param_stack'):
+            if refinement_text == "加密":
+                self.wells_param_stack.setCurrentWidget(self.wells_refined_page)
+            else:
+                self.wells_param_stack.setCurrentWidget(self.wells_unrefined_page)
+
+    def update_fractures_parameter_panel(self, refinement_text):
+        """根据是否加密切换 Fractures 参数面板。"""
+        if hasattr(self, 'fractures_param_stack'):
+            if refinement_text == "加密":
+                self.fractures_param_stack.setCurrentWidget(self.fractures_refined_page)
+            else:
+                self.fractures_param_stack.setCurrentWidget(self.fractures_unrefined_page)
+
+    def update_parameter_mode(self, refinement_text):
+        """统一同步 Grid/Wells/Fractures 三个页签的参数面板。"""
+        self.update_grid_parameter_panel(refinement_text)
+        self.update_wells_parameter_panel(refinement_text)
+        self.update_fractures_parameter_panel(refinement_text)
+
+    def is_refined_grid_mode(self):
+        return self.combo_grid_refinement.currentText() == "加密"
+
+    def collect_unrefined_grid_params(self):
+        """收集未加密角格页面参数。"""
+        return {
+            'grid_mode': 'basic_corner_point',
+            'nx': self.basic_spin_nx.value(),
+            'ny': self.basic_spin_ny.value(),
+            'nz': self.basic_spin_nz.value(),
+            'lx': self.basic_spin_lx.value(),
+            'ly': self.basic_spin_ly.value(),
+            'lz': self.basic_spin_lz.value(),
+            'porosity': self.basic_spin_porosity.value(),
+            'perm_x': self.basic_spin_perm_x.value(),
+            'perm_y': self.basic_spin_perm_y.value(),
+            'perm_z': self.basic_spin_perm_z.value(),
+            'initial_pressure': self.basic_spin_initial_pressure.value(),
+            'initial_sw': self.basic_spin_initial_sw.value(),
+            'initial_sg': self.basic_spin_initial_sg.value(),
+            'mu_w': self.basic_spin_mu_w.value(),
+            'mu_o': self.basic_spin_mu_o.value(),
+            'mu_g': self.basic_spin_mu_g.value(),
+            'cw': self.basic_spin_cw.value(),
+            'co': self.basic_spin_co.value(),
+            'cg': self.basic_spin_cg.value(),
+            'p_ref': self.basic_spin_p_ref.value(),
+            'swi': self.basic_spin_swi.value(),
+            'sor': self.basic_spin_sor.value(),
+            'sgc': self.basic_spin_sgc.value(),
+            'simulation_time': self.basic_spin_simulation_time.value(),
+            'time_step': 0.001,
+        }
+
+    def collect_refined_grid_params(self):
+        """收集加密角格页面参数。"""
+        return {
+            'grid_mode': 'lgr_corner_point',
+            'nx': self.refined_spin_nx.value(),
+            'ny': self.refined_spin_ny.value(),
+            'nz': self.refined_spin_nz.value(),
+            'lx': self.refined_spin_lx.value(),
+            'ly': self.refined_spin_ly.value(),
+            'lz': self.refined_spin_lz.value(),
+            'enable_lgr': self.check_enable_lgr.isChecked(),
+            'd_threshold': self.refined_spin_d_threshold.value(),
+            'lgr_nrx': self.refined_spin_lgr_nrx.value(),
+            'lgr_nry': self.refined_spin_lgr_nry.value(),
+            'lgr_nrz': self.refined_spin_lgr_nrz.value(),
+            'porosity': self.refined_spin_porosity.value(),
+            'perm_x': self.refined_spin_perm_x.value(),
+            'perm_y': self.refined_spin_perm_y.value(),
+            'perm_z': self.refined_spin_perm_z.value(),
+            'initial_pressure': self.refined_spin_initial_pressure.value(),
+            'initial_sw': self.refined_spin_initial_sw.value(),
+            'initial_sg': self.refined_spin_initial_sg.value(),
+            'mu_w': self.refined_spin_mu_w.value(),
+            'mu_o': self.refined_spin_mu_o.value(),
+            'mu_g': self.refined_spin_mu_g.value(),
+            'cw': self.refined_spin_cw.value(),
+            'co': self.refined_spin_co.value(),
+            'cg': self.refined_spin_cg.value(),
+            'p_ref': self.refined_spin_p_ref.value(),
+            'swi': self.refined_spin_swi.value(),
+            'sor': self.refined_spin_sor.value(),
+            'sgc': self.refined_spin_sgc.value(),
+            'simulation_time': self.refined_spin_simulation_time.value(),
+            'time_step': self.refined_spin_time_step.value(),
+        }
     
     def create_wells_page(self):
-        """创建Wells参数页面 - 与原文件一致"""
+        """创建 Wells 参数页面，支持加密/不加密两套面板。"""
         page = QWidget()
         page.setStyleSheet("background-color: #2b2b2b;")
         layout = QVBoxLayout(page)
         layout.setContentsMargins(10, 10, 10, 10)
-        
-        group = QGroupBox("Well Parameters")
-        group.setStyleSheet(self.groupbox_style())
-        grid = QGridLayout()
-        
-        # 井位置在域中心 (250, 250)
-        self.spin_well_x = QDoubleSpinBox()
-        self.spin_well_x.setRange(0, 10000)
-        self.spin_well_x.setValue(250)
-        self.spin_well_y = QDoubleSpinBox()
-        self.spin_well_y.setRange(0, 10000)
-        self.spin_well_y.setValue(250)
-        self.spin_well_z = QDoubleSpinBox()
-        self.spin_well_z.setRange(0, 1000)
-        self.spin_well_z.setValue(50)
-        self.spin_well_pressure = QDoubleSpinBox()
-        self.spin_well_pressure.setRange(0, 1000)
-        self.spin_well_pressure.setValue(50)
-        self.spin_well_radius = QDoubleSpinBox()
-        self.spin_well_radius.setDecimals(3)
-        self.spin_well_radius.setRange(0.01, 10)
-        self.spin_well_radius.setValue(0.1)
-        
-        grid.addWidget(QLabel("Well X (m):"), 0, 0)
-        grid.addWidget(self.spin_well_x, 0, 1)
-        grid.addWidget(QLabel("Well Y (m):"), 1, 0)
-        grid.addWidget(self.spin_well_y, 1, 1)
-        grid.addWidget(QLabel("Well Z (m):"), 2, 0)
-        grid.addWidget(self.spin_well_z, 2, 1)
-        grid.addWidget(QLabel("Pressure (MPa):"), 3, 0)
-        grid.addWidget(self.spin_well_pressure, 3, 1)
-        grid.addWidget(QLabel("Radius (m):"), 4, 0)
-        grid.addWidget(self.spin_well_radius, 4, 1)
-        
-        group.setLayout(grid)
-        layout.addWidget(group)
 
-        hf_group = QGroupBox("人工裂缝参数")
+        self.wells_param_stack = QStackedWidget()
+        self.wells_unrefined_page = self.create_unrefined_wells_params_page()
+        self.wells_refined_page = self.create_refined_wells_params_page()
+        self.wells_param_stack.addWidget(self.wells_unrefined_page)
+        self.wells_param_stack.addWidget(self.wells_refined_page)
+        layout.addWidget(self.wells_param_stack, 1)
+        self.update_wells_parameter_panel(self.combo_grid_refinement.currentText())
+        layout.addStretch()
+        
+        return page
+
+    def create_unrefined_wells_params_page(self):
+        """未加密模式的 Wells 参数面板。"""
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        self.basic_spin_well_x = self.create_double_spinbox(0.0, 100000.0, 1500.0, decimals=2)
+        self.basic_spin_well_y = self.create_double_spinbox(0.0, 100000.0, 150.0, decimals=2)
+        self.basic_spin_well_z = self.create_double_spinbox(0.0, 10000.0, 20.0, decimals=2)
+        self.basic_spin_well_pressure = self.create_double_spinbox(0.0, 100000.0, 50.0, decimals=2)
+        self.basic_spin_well_radius = self.create_double_spinbox(0.001, 100.0, 0.05, decimals=3)
+        layout.addWidget(self.create_parameter_group("Well Parameters", [
+            ("Well X (m):", self.basic_spin_well_x),
+            ("Well Y (m):", self.basic_spin_well_y),
+            ("Well Z (m):", self.basic_spin_well_z),
+            ("Pressure (bar):", self.basic_spin_well_pressure),
+            ("Radius (m):", self.basic_spin_well_radius),
+        ]))
+
+        self.basic_check_enable_hf = QCheckBox("启用人工裂缝")
+        self.basic_check_enable_hf.setChecked(True)
+        self.basic_spin_hf_count = self.create_spinbox(0, 200, 20)
+        self.basic_spin_hf_well_length = self.create_double_spinbox(0.0, 100000.0, 2000.0, decimals=2)
+        self.basic_spin_hf_length = self.create_double_spinbox(0.0, 100000.0, 120.0, decimals=2)
+        self.basic_spin_hf_height = self.create_double_spinbox(0.0, 100000.0, 40.0, decimals=2)
+        self.basic_spin_hf_aperture = self.create_double_spinbox(0.0, 10.0, 0.01, decimals=4)
+        self.basic_spin_hf_perm = self.create_double_spinbox(0.0, 1000000.0, 10000.0, decimals=2)
+        self.basic_spin_hf_center_x = self.create_double_spinbox(0.0, 100000.0, 1500.0, decimals=2)
+        self.basic_spin_hf_center_y = self.create_double_spinbox(0.0, 100000.0, 150.0, decimals=2)
+        self.basic_spin_hf_center_z = self.create_double_spinbox(0.0, 100000.0, 20.0, decimals=2)
+
+        hf_group = QGroupBox("Hydraulic Fractures")
         hf_group.setStyleSheet(self.groupbox_style())
-        hf_grid = QGridLayout()
-
-        self.check_enable_hf = QCheckBox("启用人工裂缝")
-        self.check_enable_hf.setChecked(False)
-
-        self.spin_hf_count = QSpinBox()
-        self.spin_hf_count.setRange(0, 50)
-        self.spin_hf_count.setValue(3)
-
-        self.spin_hf_center_x = QDoubleSpinBox()
-        self.spin_hf_center_x.setRange(0, 10000)
-        self.spin_hf_center_x.setValue(500)
-        self.spin_hf_center_y = QDoubleSpinBox()
-        self.spin_hf_center_y.setRange(0, 10000)
-        self.spin_hf_center_y.setValue(250)
-        self.spin_hf_center_z = QDoubleSpinBox()
-        self.spin_hf_center_z.setRange(0, 1000)
-        self.spin_hf_center_z.setValue(25)
-
-        self.spin_hf_spacing_x = QDoubleSpinBox()
-        self.spin_hf_spacing_x.setDecimals(1)
-        self.spin_hf_spacing_x.setRange(0, 1000)
-        self.spin_hf_spacing_x.setValue(100.1)
-
-        self.spin_hf_length = QDoubleSpinBox()
-        self.spin_hf_length.setRange(1, 2000)
-        self.spin_hf_length.setValue(200)
-        self.spin_hf_height = QDoubleSpinBox()
-        self.spin_hf_height.setRange(1, 1000)
-        self.spin_hf_height.setValue(40)
-
-        self.spin_hf_aperture = QDoubleSpinBox()
-        self.spin_hf_aperture.setDecimals(4)
-        self.spin_hf_aperture.setRange(0.0, 1.0)
-        self.spin_hf_aperture.setValue(0.001)
-
-        self.spin_hf_perm = QDoubleSpinBox()
-        self.spin_hf_perm.setRange(0, 1000000)
-        self.spin_hf_perm.setValue(10000)
-
-        hf_grid.addWidget(self.check_enable_hf, 0, 0, 1, 2)
-        hf_grid.addWidget(QLabel("裂缝数量:"), 1, 0)
-        hf_grid.addWidget(self.spin_hf_count, 1, 1)
-        hf_grid.addWidget(QLabel("中心 X (m):"), 2, 0)
-        hf_grid.addWidget(self.spin_hf_center_x, 2, 1)
-        hf_grid.addWidget(QLabel("中心 Y (m):"), 3, 0)
-        hf_grid.addWidget(self.spin_hf_center_y, 3, 1)
-        hf_grid.addWidget(QLabel("中心 Z (m):"), 4, 0)
-        hf_grid.addWidget(self.spin_hf_center_z, 4, 1)
-        hf_grid.addWidget(QLabel("X 向间距 (m):"), 5, 0)
-        hf_grid.addWidget(self.spin_hf_spacing_x, 5, 1)
-        hf_grid.addWidget(QLabel("裂缝长度 (m):"), 6, 0)
-        hf_grid.addWidget(self.spin_hf_length, 6, 1)
-        hf_grid.addWidget(QLabel("裂缝高度 (m):"), 7, 0)
-        hf_grid.addWidget(self.spin_hf_height, 7, 1)
-        hf_grid.addWidget(QLabel("裂缝开度 (m):"), 8, 0)
-        hf_grid.addWidget(self.spin_hf_aperture, 8, 1)
-        hf_grid.addWidget(QLabel("裂缝渗透率 (Darcy):"), 9, 0)
-        hf_grid.addWidget(self.spin_hf_perm, 9, 1)
-
-        hf_group.setLayout(hf_grid)
+        hf_layout = QGridLayout()
+        hf_layout.addWidget(self.basic_check_enable_hf, 0, 0, 1, 2)
+        hf_layout.addWidget(QLabel("裂缝数量:"), 1, 0)
+        hf_layout.addWidget(self.basic_spin_hf_count, 1, 1)
+        hf_layout.addWidget(QLabel("Well Length (m):"), 2, 0)
+        hf_layout.addWidget(self.basic_spin_hf_well_length, 2, 1)
+        hf_layout.addWidget(QLabel("裂缝长度 (m):"), 3, 0)
+        hf_layout.addWidget(self.basic_spin_hf_length, 3, 1)
+        hf_layout.addWidget(QLabel("裂缝高度 (m):"), 4, 0)
+        hf_layout.addWidget(self.basic_spin_hf_height, 4, 1)
+        hf_layout.addWidget(QLabel("裂缝开度 (m):"), 5, 0)
+        hf_layout.addWidget(self.basic_spin_hf_aperture, 5, 1)
+        hf_layout.addWidget(QLabel("裂缝渗透率 (Darcy):"), 6, 0)
+        hf_layout.addWidget(self.basic_spin_hf_perm, 6, 1)
+        hf_layout.addWidget(QLabel("中心 X (m):"), 7, 0)
+        hf_layout.addWidget(self.basic_spin_hf_center_x, 7, 1)
+        hf_layout.addWidget(QLabel("中心 Y (m):"), 8, 0)
+        hf_layout.addWidget(self.basic_spin_hf_center_y, 8, 1)
+        hf_layout.addWidget(QLabel("中心 Z (m):"), 9, 0)
+        hf_layout.addWidget(self.basic_spin_hf_center_z, 9, 1)
+        hf_group.setLayout(hf_layout)
         layout.addWidget(hf_group)
         layout.addStretch()
-        
-        return page
+
+        return self.wrap_in_scroll_area(content)
+
+    def create_refined_wells_params_page(self):
+        """加密模式的 Wells 参数面板。"""
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        self.refined_spin_well_x = self.create_double_spinbox(0.0, 100000.0, 500.0, decimals=2)
+        self.refined_spin_well_y = self.create_double_spinbox(0.0, 100000.0, 250.0, decimals=2)
+        self.refined_spin_well_z = self.create_double_spinbox(0.0, 100000.0, 50.0, decimals=2)
+        self.refined_spin_well_pressure = self.create_double_spinbox(0.0, 100000.0, 50.0, decimals=2)
+        self.refined_spin_well_radius = self.create_double_spinbox(0.001, 100.0, 0.05, decimals=3)
+        layout.addWidget(self.create_parameter_group("Well Parameters", [
+            ("Well X (m):", self.refined_spin_well_x),
+            ("Well Y (m):", self.refined_spin_well_y),
+            ("Well Z (m):", self.refined_spin_well_z),
+            ("Pressure (bar):", self.refined_spin_well_pressure),
+            ("Radius (m):", self.refined_spin_well_radius),
+        ]))
+        layout.addStretch()
+
+        return self.wrap_in_scroll_area(content)
+
+    def collect_unrefined_wells_params(self):
+        hf_count = self.basic_spin_hf_count.value()
+        hf_well_length = self.basic_spin_hf_well_length.value()
+        return {
+            'well_x': self.basic_spin_well_x.value(),
+            'well_y': self.basic_spin_well_y.value(),
+            'well_z': self.basic_spin_well_z.value(),
+            'well_pressure': self.basic_spin_well_pressure.value(),
+            'well_radius': self.basic_spin_well_radius.value(),
+            'hf_enabled': self.basic_check_enable_hf.isChecked(),
+            'hf_count': hf_count,
+            'hf_well_length': hf_well_length,
+            'hf_center_x': self.basic_spin_hf_center_x.value(),
+            'hf_center_y': self.basic_spin_hf_center_y.value(),
+            'hf_center_z': self.basic_spin_hf_center_z.value(),
+            'hf_spacing_x': (hf_well_length / (hf_count - 1)) if hf_count > 1 else 0.0,
+            'hf_length': self.basic_spin_hf_length.value(),
+            'hf_height': self.basic_spin_hf_height.value(),
+            'hf_aperture': self.basic_spin_hf_aperture.value(),
+            'hf_perm': self.basic_spin_hf_perm.value(),
+        }
+
+    def collect_refined_wells_params(self):
+        return {
+            'well_x': self.refined_spin_well_x.value(),
+            'well_y': self.refined_spin_well_y.value(),
+            'well_z': self.refined_spin_well_z.value(),
+            'well_pressure': self.refined_spin_well_pressure.value(),
+            'well_radius': self.refined_spin_well_radius.value(),
+            'hf_enabled': False,
+            'hf_count': 0,
+            'hf_well_length': 0.0,
+            'hf_center_x': self.refined_spin_well_x.value(),
+            'hf_center_y': self.refined_spin_well_y.value(),
+            'hf_center_z': self.refined_spin_well_z.value(),
+            'hf_spacing_x': 0.0,
+            'hf_length': 0.0,
+            'hf_height': 0.0,
+            'hf_aperture': 0.0,
+            'hf_perm': 0.0,
+        }
     
     def create_fractures_page(self):
-        """创建Fractures参数页面 - 与原文件一致"""
+        """创建 Fractures 参数页面，支持加密/不加密两套面板。"""
         page = QWidget()
         page.setStyleSheet("background-color: #2b2b2b;")
         layout = QVBoxLayout(page)
         layout.setContentsMargins(10, 10, 10, 10)
-        
-        group = QGroupBox("Fracture Parameters")
-        group.setStyleSheet(self.groupbox_style())
-        grid = QGridLayout()
-        
-        # 修正参数: 与原始算法一致 - 100个裂缝, 长度30-80m, 开度0.001m
-        self.spin_num_fracs = QSpinBox()
-        self.spin_num_fracs.setRange(0, 200)
-        self.spin_num_fracs.setValue(100)
-        self.spin_min_len = QDoubleSpinBox()
-        self.spin_min_len.setRange(1, 500)
-        self.spin_min_len.setValue(30)
-        self.spin_max_len = QDoubleSpinBox()
-        self.spin_max_len.setRange(1, 500)
-        self.spin_max_len.setValue(80)
-        self.spin_aperture = QDoubleSpinBox()
-        self.spin_aperture.setDecimals(4)
-        self.spin_aperture.setRange(0.0, 1.0)
-        self.spin_aperture.setValue(0.001)
-        
-        grid.addWidget(QLabel("Num Fractures:"), 0, 0)
-        grid.addWidget(self.spin_num_fracs, 0, 1)
-        grid.addWidget(QLabel("Min Length (m):"), 1, 0)
-        grid.addWidget(self.spin_min_len, 1, 1)
-        grid.addWidget(QLabel("Max Length (m):"), 2, 0)
-        grid.addWidget(self.spin_max_len, 2, 1)
-        grid.addWidget(QLabel("Aperture (m):"), 3, 0)
-        grid.addWidget(self.spin_aperture, 3, 1)
-        
-        group.setLayout(grid)
-        layout.addWidget(group)
+
+        self.fractures_param_stack = QStackedWidget()
+        self.fractures_unrefined_page = self.create_unrefined_fractures_params_page()
+        self.fractures_refined_page = self.create_refined_fractures_params_page()
+        self.fractures_param_stack.addWidget(self.fractures_unrefined_page)
+        self.fractures_param_stack.addWidget(self.fractures_refined_page)
+        layout.addWidget(self.fractures_param_stack, 1)
+        self.update_fractures_parameter_panel(self.combo_grid_refinement.currentText())
         layout.addStretch()
         
         return page
+
+    def create_unrefined_fractures_params_page(self):
+        """未加密模式的天然裂缝参数面板。"""
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        self.basic_spin_num_fracs = self.create_spinbox(0, 500, 60)
+        self.basic_spin_min_len = self.create_double_spinbox(0.0, 100000.0, 30.0, decimals=2)
+        self.basic_spin_max_len = self.create_double_spinbox(0.0, 100000.0, 80.0, decimals=2)
+        self.basic_spin_max_dip = self.create_double_spinbox(0.0, math.pi, math.pi / 3.0, decimals=4)
+        self.basic_spin_min_strike = self.create_double_spinbox(0.0, 2 * math.pi, 0.0, decimals=4)
+        self.basic_spin_max_strike = self.create_double_spinbox(0.0, 2 * math.pi, math.pi, decimals=4)
+        self.basic_spin_aperture = self.create_double_spinbox(0.0, 10.0, 0.01, decimals=4)
+        self.basic_spin_frac_perm = self.create_double_spinbox(0.0, 1000000.0, 1000.0, decimals=2)
+        layout.addWidget(self.create_parameter_group("Natural Fractures", [
+            ("Num Fractures:", self.basic_spin_num_fracs),
+            ("Min Length (m):", self.basic_spin_min_len),
+            ("Max Length (m):", self.basic_spin_max_len),
+            ("Max Dip (rad):", self.basic_spin_max_dip),
+            ("Min Strike (rad):", self.basic_spin_min_strike),
+            ("Max Strike (rad):", self.basic_spin_max_strike),
+            ("Aperture (m):", self.basic_spin_aperture),
+            ("Permeability (Darcy):", self.basic_spin_frac_perm),
+        ]))
+        layout.addStretch()
+
+        return self.wrap_in_scroll_area(content)
+
+    def create_refined_fractures_params_page(self):
+        """加密模式的天然裂缝参数面板。"""
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        self.refined_spin_num_fracs = self.create_spinbox(0, 500, 100)
+        self.refined_spin_min_len = self.create_double_spinbox(0.0, 100000.0, 30.0, decimals=2)
+        self.refined_spin_max_len = self.create_double_spinbox(0.0, 100000.0, 80.0, decimals=2)
+        self.refined_spin_max_dip = self.create_double_spinbox(0.0, math.pi, math.pi / 3.0, decimals=4)
+        self.refined_spin_min_strike = self.create_double_spinbox(0.0, 2 * math.pi, 0.0, decimals=4)
+        self.refined_spin_max_strike = self.create_double_spinbox(0.0, 2 * math.pi, math.pi, decimals=4)
+        self.refined_spin_aperture = self.create_double_spinbox(0.0, 10.0, 0.001, decimals=4)
+        self.refined_spin_frac_perm = self.create_double_spinbox(0.0, 1000000.0, 10000.0, decimals=2)
+        layout.addWidget(self.create_parameter_group("Natural Fractures", [
+            ("Num Fractures:", self.refined_spin_num_fracs),
+            ("Min Length (m):", self.refined_spin_min_len),
+            ("Max Length (m):", self.refined_spin_max_len),
+            ("Max Dip (rad):", self.refined_spin_max_dip),
+            ("Min Strike (rad):", self.refined_spin_min_strike),
+            ("Max Strike (rad):", self.refined_spin_max_strike),
+            ("Aperture (m):", self.refined_spin_aperture),
+            ("Permeability (Darcy):", self.refined_spin_frac_perm),
+        ]))
+        layout.addStretch()
+
+        return self.wrap_in_scroll_area(content)
+
+    def collect_unrefined_fractures_params(self):
+        return {
+            'num_fracs': self.basic_spin_num_fracs.value(),
+            'min_len': self.basic_spin_min_len.value(),
+            'max_len': self.basic_spin_max_len.value(),
+            'max_dip': self.basic_spin_max_dip.value(),
+            'min_strike': self.basic_spin_min_strike.value(),
+            'max_strike': self.basic_spin_max_strike.value(),
+            'aperture': self.basic_spin_aperture.value(),
+            'frac_perm': self.basic_spin_frac_perm.value(),
+        }
+
+    def collect_refined_fractures_params(self):
+        return {
+            'num_fracs': self.refined_spin_num_fracs.value(),
+            'min_len': self.refined_spin_min_len.value(),
+            'max_len': self.refined_spin_max_len.value(),
+            'max_dip': self.refined_spin_max_dip.value(),
+            'min_strike': self.refined_spin_min_strike.value(),
+            'max_strike': self.refined_spin_max_strike.value(),
+            'aperture': self.refined_spin_aperture.value(),
+            'frac_perm': self.refined_spin_frac_perm.value(),
+        }
     
     def create_results_page(self):
         """创建Results页面 - 与原文件一致"""
@@ -798,33 +1187,24 @@ class MainWindow(QMainWindow):
     
     def collect_simulation_params(self):
         """收集当前UI中的模拟参数。"""
-        return {
-            'nx': self.spin_nx.value(),
-            'ny': self.spin_ny.value(),
-            'nz': self.spin_nz.value(),
-            'lx': self.spin_lx.value(),
-            'ly': self.spin_ly.value(),
-            'lz': self.spin_lz.value(),
-            'num_fracs': self.spin_num_fracs.value(),
-            'min_len': self.spin_min_len.value(),
-            'max_len': self.spin_max_len.value(),
-            'aperture': self.spin_aperture.value(),
-            'well_x': self.spin_well_x.value(),
-            'well_y': self.spin_well_y.value(),
-            'well_z': self.spin_well_z.value(),
-            'well_pressure': self.spin_well_pressure.value(),
-            'well_radius': self.spin_well_radius.value(),
-            'hf_enabled': self.check_enable_hf.isChecked(),
-            'hf_count': self.spin_hf_count.value(),
-            'hf_center_x': self.spin_hf_center_x.value(),
-            'hf_center_y': self.spin_hf_center_y.value(),
-            'hf_center_z': self.spin_hf_center_z.value(),
-            'hf_spacing_x': self.spin_hf_spacing_x.value(),
-            'hf_length': self.spin_hf_length.value(),
-            'hf_height': self.spin_hf_height.value(),
-            'hf_aperture': self.spin_hf_aperture.value(),
-            'hf_perm': self.spin_hf_perm.value(),
+        params = {
+            'grid_refinement': self.combo_grid_refinement.currentText(),
+            'grid_type': (
+                self.combo_grid_type.currentData()
+                if self.show_grid_type_selector else self.default_grid_type
+            ),
         }
+
+        if self.is_refined_grid_mode():
+            params.update(self.collect_refined_grid_params())
+            params.update(self.collect_refined_fractures_params())
+            params.update(self.collect_refined_wells_params())
+        else:
+            params.update(self.collect_unrefined_grid_params())
+            params.update(self.collect_unrefined_fractures_params())
+            params.update(self.collect_unrefined_wells_params())
+
+        return params
 
     def run_simulation(self):
         """通过子进程运行模拟，并实时显示算法输出。"""
