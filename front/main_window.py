@@ -880,7 +880,12 @@ class MainWindow(QMainWindow):
             ("Pressure (bar):", self.basic_spin_well_pressure),
             ("Radius (m):", self.basic_spin_well_radius),
         ]))
+        layout.addStretch()
 
+        return self.wrap_in_scroll_area(content)
+
+    def create_basic_hydraulic_fractures_group(self):
+        """未加密模式的人工裂缝参数分组。"""
         self.basic_check_enable_hf = QCheckBox("启用人工裂缝")
         self.basic_check_enable_hf.setChecked(True)
         self.basic_spin_hf_count = self.create_spinbox(0, 200, 20)
@@ -893,33 +898,30 @@ class MainWindow(QMainWindow):
         self.basic_spin_hf_center_y = self.create_double_spinbox(0.0, 100000.0, 150.0, decimals=2)
         self.basic_spin_hf_center_z = self.create_double_spinbox(0.0, 100000.0, 20.0, decimals=2)
 
-        hf_group = QGroupBox("Hydraulic Fractures")
-        hf_group.setStyleSheet(self.groupbox_style())
-        hf_layout = QGridLayout()
-        hf_layout.addWidget(self.basic_check_enable_hf, 0, 0, 1, 2)
-        hf_layout.addWidget(QLabel("裂缝数量:"), 1, 0)
-        hf_layout.addWidget(self.basic_spin_hf_count, 1, 1)
-        hf_layout.addWidget(QLabel("Well Length (m):"), 2, 0)
-        hf_layout.addWidget(self.basic_spin_hf_well_length, 2, 1)
-        hf_layout.addWidget(QLabel("裂缝长度 (m):"), 3, 0)
-        hf_layout.addWidget(self.basic_spin_hf_length, 3, 1)
-        hf_layout.addWidget(QLabel("裂缝高度 (m):"), 4, 0)
-        hf_layout.addWidget(self.basic_spin_hf_height, 4, 1)
-        hf_layout.addWidget(QLabel("裂缝开度 (m):"), 5, 0)
-        hf_layout.addWidget(self.basic_spin_hf_aperture, 5, 1)
-        hf_layout.addWidget(QLabel("裂缝渗透率 (Darcy):"), 6, 0)
-        hf_layout.addWidget(self.basic_spin_hf_perm, 6, 1)
-        hf_layout.addWidget(QLabel("中心 X (m):"), 7, 0)
-        hf_layout.addWidget(self.basic_spin_hf_center_x, 7, 1)
-        hf_layout.addWidget(QLabel("中心 Y (m):"), 8, 0)
-        hf_layout.addWidget(self.basic_spin_hf_center_y, 8, 1)
-        hf_layout.addWidget(QLabel("中心 Z (m):"), 9, 0)
-        hf_layout.addWidget(self.basic_spin_hf_center_z, 9, 1)
-        hf_group.setLayout(hf_layout)
-        layout.addWidget(hf_group)
-        layout.addStretch()
-
-        return self.wrap_in_scroll_area(content)
+        group = QGroupBox("Hydraulic Fractures")
+        group.setStyleSheet(self.groupbox_style())
+        layout = QGridLayout()
+        layout.addWidget(self.basic_check_enable_hf, 0, 0, 1, 2)
+        layout.addWidget(QLabel("裂缝数量:"), 1, 0)
+        layout.addWidget(self.basic_spin_hf_count, 1, 1)
+        layout.addWidget(QLabel("Well Length (m):"), 2, 0)
+        layout.addWidget(self.basic_spin_hf_well_length, 2, 1)
+        layout.addWidget(QLabel("裂缝长度 (m):"), 3, 0)
+        layout.addWidget(self.basic_spin_hf_length, 3, 1)
+        layout.addWidget(QLabel("裂缝高度 (m):"), 4, 0)
+        layout.addWidget(self.basic_spin_hf_height, 4, 1)
+        layout.addWidget(QLabel("裂缝开度 (m):"), 5, 0)
+        layout.addWidget(self.basic_spin_hf_aperture, 5, 1)
+        layout.addWidget(QLabel("裂缝渗透率 (Darcy):"), 6, 0)
+        layout.addWidget(self.basic_spin_hf_perm, 6, 1)
+        layout.addWidget(QLabel("中心 X (m):"), 7, 0)
+        layout.addWidget(self.basic_spin_hf_center_x, 7, 1)
+        layout.addWidget(QLabel("中心 Y (m):"), 8, 0)
+        layout.addWidget(self.basic_spin_hf_center_y, 8, 1)
+        layout.addWidget(QLabel("中心 Z (m):"), 9, 0)
+        layout.addWidget(self.basic_spin_hf_center_z, 9, 1)
+        group.setLayout(layout)
+        return group
 
     def create_refined_wells_params_page(self):
         """加密模式的 Wells 参数面板。"""
@@ -1029,6 +1031,7 @@ class MainWindow(QMainWindow):
             ("Aperture (m):", self.basic_spin_aperture),
             ("Permeability (Darcy):", self.basic_spin_frac_perm),
         ]))
+        layout.addWidget(self.create_basic_hydraulic_fractures_group())
         layout.addStretch()
 
         return self.wrap_in_scroll_area(content)
