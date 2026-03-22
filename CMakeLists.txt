@@ -28,5 +28,16 @@ pybind11_add_module(edfm_core
     src/lgr/edfm_3d_blackoil_lgr.cpp
 )
 
+
+# 创建新模块 - Corner Point Grid EDFM
+pybind11_add_module(edfm_core_corner
+    src/basic/Corner_Point_Grid_edfm_3d_water_oil.cpp
+)
+
+
 target_include_directories(edfm_core PRIVATE ${EIGEN3_INCLUDE_DIR})
 target_link_libraries(edfm_core PRIVATE pybind11::module)
+
+
+target_include_directories(edfm_core_corner PRIVATE ${EIGEN3_INCLUDE_DIR})
+target_link_libraries(edfm_core_corner PRIVATE pybind11::module)
