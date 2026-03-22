@@ -29,7 +29,7 @@ from visual.vtk_renderer import VTKRenderer
 
 
 class AlgorithmSelector(QWidget):
-    """算法选择器（单行紧凑）- 与原文件一致"""
+    """算法选择器 - 统一注册方式"""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedHeight(28)
@@ -41,33 +41,23 @@ class AlgorithmSelector(QWidget):
         self.icon_label.setFixedSize(20, 20)
         self.icon_label.setPixmap(self.create_colorful_icon())
         
-        self.name_label = QLabel("Black Oil")
-        self.name_label.setStyleSheet("""
-            QLabel {
-                color: #4CAF50;
-                font-weight: bold;
-                font-size: 12px;
-            }
-        """)
+        # 注册可用算法
+        self.algorithms = {
+            "black_oil": {"name": "Black Oil", "color": "#4CAF50", "active_color": "#4CAF50"},
+            "black_oil_corner_grid": {"name": "Corner Grid", "color": "#2196F3", "active_color": "#FF9800"},
+        }
+        self.disabled_algos = ["Comp", "Thermal", "Foam", "Polymer"]
         
-        self.corner_grid_label = QLabel("Corner Grid")
-        self.corner_grid_label.setStyleSheet("""
-            QLabel {
-                color: #2196F3;
-                font-weight: bold;
-                font-size: 12px;
-            }
-        """)
-        self.corner_grid_label.setCursor(Qt.PointingHandCursor)
-        self.corner_grid_label.mousePressEvent = self.on_corner_grid_click
+        self.algo_labels = {}
+        for algo_id, config in self.algorithms.items():
+            lbl = QLabel(config["name"])
+            lbl.setStyleSheet(f"color: {config['color']}; font-weight: bold; font-size: 12px;")
+            lbl.setCursor(Qt.PointingHandCursor)
+            lbl.mousePressEvent = lambda event, a=algo_id: self.on_algo_click(a)
+            self.algo_labels[algo_id] = lbl
+            self.layout.addWidget(lbl)
         
-        self.other_algos = ["Comp", "Thermal", "Foam", "Polymer"]
-        
-        self.layout.addWidget(self.icon_label)
-        self.layout.addWidget(self.name_label)
-        self.layout.addWidget(self.corner_grid_label)
-        
-        for algo in self.other_algos:
+        for algo in self.disabled_algos:
             lbl = QLabel(algo)
             lbl.setStyleSheet("color: #666666; font-size: 10px;")
             self.layout.addWidget(lbl)
@@ -77,22 +67,22 @@ class AlgorithmSelector(QWidget):
         self.current_algorithm = "black_oil"
         self.on_algorithm_changed = None
     
-    def on_corner_grid_click(self, event):
-        """点击Corner Grid算法"""
-        self.set_current_algorithm("black_oil_corner_grid")
+    def on_algo_click(self, algo_id):
+        """统一算法点击处理"""
+        self.set_current_algorithm(algo_id)
     
-    def set_current_algorithm(self, algo):
-        """设置当前算法"""
-        self.current_algorithm = algo
-        if algo == "black_oil":
-            self.name_label.setStyleSheet("color: #4CAF50; font-weight: bold; font-size: 12px;")
-            self.corner_grid_label.setStyleSheet("color: #2196F3; font-weight: bold; font-size: 12px;")
-        elif algo == "black_oil_corner_grid":
-            self.name_label.setStyleSheet("color: #666666; font-weight: bold; font-size: 12px;")
-            self.corner_grid_label.setStyleSheet("color: #FF9800; font-weight: bold; font-size: 12px;")
+    def set_current_algorithm(self, algo_id):
+        """设置当前算法并更新样式"""
+        self.current_algorithm = algo_id
+        for aid, lbl in self.algo_labels.items():
+            config = self.algorithms[aid]
+            if aid == algo_id:
+                lbl.setStyleSheet(f"color: {config['active_color']}; font-weight: bold; font-size: 12px;")
+            else:
+                lbl.setStyleSheet(f"color: #666666; font-weight: bold; font-size: 12px;")
         
         if self.on_algorithm_changed:
-            self.on_algorithm_changed(algo)
+            self.on_algorithm_changed(algo_id)
     
     def create_colorful_icon(self):
         """创建彩色算法图标 - 与原文件一致"""
