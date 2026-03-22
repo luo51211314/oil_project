@@ -21,7 +21,7 @@ from vtk.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 import vtk
 
 # 导入本地模块
-from .data_models import SimulationData
+from .data_models import SimulationData, CornerPointCell, CornerPointGridData
 
 # 导入可视化模块
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -32,12 +32,11 @@ class AlgorithmSelector(QWidget):
     """算法选择器（单行紧凑）- 与原文件一致"""
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(28)  # 缩窄高度
+        self.setFixedHeight(28)
         self.layout = QHBoxLayout(self)
         self.layout.setContentsMargins(5, 2, 5, 2)
         self.layout.setSpacing(8)
         
-        # 创建彩色图标（小尺寸）
         self.icon_label = QLabel()
         self.icon_label.setFixedSize(20, 20)
         self.icon_label.setPixmap(self.create_colorful_icon())
@@ -51,11 +50,22 @@ class AlgorithmSelector(QWidget):
             }
         """)
         
-        # 其他算法（灰色显示，无法点击）
+        self.corner_grid_label = QLabel("Corner Grid")
+        self.corner_grid_label.setStyleSheet("""
+            QLabel {
+                color: #2196F3;
+                font-weight: bold;
+                font-size: 12px;
+            }
+        """)
+        self.corner_grid_label.setCursor(Qt.PointingHandCursor)
+        self.corner_grid_label.mousePressEvent = self.on_corner_grid_click
+        
         self.other_algos = ["Comp", "Thermal", "Foam", "Polymer"]
         
         self.layout.addWidget(self.icon_label)
         self.layout.addWidget(self.name_label)
+        self.layout.addWidget(self.corner_grid_label)
         
         for algo in self.other_algos:
             lbl = QLabel(algo)
@@ -63,6 +73,26 @@ class AlgorithmSelector(QWidget):
             self.layout.addWidget(lbl)
         
         self.layout.addStretch()
+        
+        self.current_algorithm = "black_oil"
+        self.on_algorithm_changed = None
+    
+    def on_corner_grid_click(self, event):
+        """点击Corner Grid算法"""
+        self.set_current_algorithm("black_oil_corner_grid")
+    
+    def set_current_algorithm(self, algo):
+        """设置当前算法"""
+        self.current_algorithm = algo
+        if algo == "black_oil":
+            self.name_label.setStyleSheet("color: #4CAF50; font-weight: bold; font-size: 12px;")
+            self.corner_grid_label.setStyleSheet("color: #2196F3; font-weight: bold; font-size: 12px;")
+        elif algo == "black_oil_corner_grid":
+            self.name_label.setStyleSheet("color: #666666; font-weight: bold; font-size: 12px;")
+            self.corner_grid_label.setStyleSheet("color: #FF9800; font-weight: bold; font-size: 12px;")
+        
+        if self.on_algorithm_changed:
+            self.on_algorithm_changed(algo)
     
     def create_colorful_icon(self):
         """创建彩色算法图标 - 与原文件一致"""
@@ -133,6 +163,7 @@ class MainWindow(QMainWindow):
         self.pending_step_summary = False
         self.default_grid_type = "corner_point"
         self.show_grid_type_selector = False
+        self.current_algorithm = "black_oil"
         
         # 缓存VTK对象，避免重复生成
         self.cache = {
@@ -219,18 +250,143 @@ class MainWindow(QMainWindow):
     def create_algorithm_bar_widget(self):
         """创建算法选择栏部件 - 与原文件一致"""
         algo_bar = QWidget()
-        algo_bar.setFixedHeight(32)  # 固定高度32像素
+        algo_bar.setFixedHeight(32)
         algo_bar.setStyleSheet("background-color: #1e1e1e; border-bottom: 1px solid #3d3d3d;")
         algo_layout = QHBoxLayout(algo_bar)
         algo_layout.setContentsMargins(10, 2, 10, 2)
         algo_layout.setSpacing(10)
         
-        # 添加彩色算法选择器
         algo_selector = AlgorithmSelector()
+        algo_selector.on_algorithm_changed = self.on_algorithm_changed
+        self.algo_selector = algo_selector
         algo_layout.addWidget(algo_selector)
         algo_layout.addStretch()
         
         return algo_bar
+    
+    def on_algorithm_changed(self, algo):
+        """算法切换回调"""
+        self.current_algorithm = algo
+        self.status_bar.showMessage(f"Algorithm: {algo}")
+    
+    def generate_mock_corner_point_grid(self, nx=20, ny=10, nz=5, lx=1000.0, ly=500.0, lz=100.0):
+        """生成模拟角点网格数据（带地质曲面效果）
+        
+        使用正弦波和随机扰动模拟真实地质曲面
+        """
+        import math
+        import random
+        
+        cpg = CornerPointGridData()
+        cpg.nx = nx
+        cpg.ny = ny
+        cpg.nz = nz
+        cpg.lx = lx
+        cpg.ly = ly
+        cpg.lz = lz
+        
+        dx = lx / nx
+        dy = ly / ny
+        dz = lz / nz
+        
+        def surface_z(x, y, is_top=True):
+            """生成地质曲面Z坐标
+            
+            使用多层正弦波叠加模拟真实地质构造
+            """
+            base_z = lz * 0.3 if not is_top else lz * 0.7
+            
+            wave1 = 15.0 * math.sin(2 * math.pi * x / lx * 2) * math.sin(2 * math.pi * y / ly * 1.5)
+            wave2 = 10.0 * math.sin(2 * math.pi * x / lx * 3.5 + 0.5) * math.cos(2 * math.pi * y / ly * 2.5)
+            wave3 = 8.0 * math.cos(2 * math.pi * x / lx * 1.5 + 1.0) * math.sin(2 * math.pi * y / ly * 3.0)
+            
+            fault_offset = 0
+            if lx * 0.4 < x < lx * 0.6:
+                fault_offset = 12.0 * math.sin(math.pi * (x - lx * 0.4) / (lx * 0.2))
+            
+            dome = 20.0 * math.exp(-((x - lx * 0.7)**2 + (y - ly * 0.3)**2) / (lx * ly * 0.05))
+            
+            if is_top:
+                return base_z + wave1 + wave2 + wave3 + fault_offset + dome
+            else:
+                return base_z + wave1 * 0.5 + wave2 * 0.3 + wave3 * 0.4 + fault_offset * 0.5 + dome * 0.3
+        
+        well_x = lx * 0.5
+        well_y = ly * 0.5
+        well_z = lz * 0.5
+        
+        cell_id = 0
+        min_p = float('inf')
+        max_p = float('-inf')
+        
+        for k in range(nz):
+            for j in range(ny):
+                for i in range(nx):
+                    cell = CornerPointCell(cell_id)
+                    cell.ix = i
+                    cell.iy = j
+                    cell.iz = k
+                    
+                    x0 = i * dx
+                    x1 = (i + 1) * dx
+                    y0 = j * dy
+                    y1 = (j + 1) * dy
+                    
+                    z_bot_local = surface_z(x0, y0, False)
+                    z_bot_x1 = surface_z(x1, y0, False)
+                    z_bot_y1 = surface_z(x0, y1, False)
+                    z_bot_x1y1 = surface_z(x1, y1, False)
+                    
+                    z_top_local = surface_z(x0, y0, True)
+                    z_top_x1 = surface_z(x1, y0, True)
+                    z_top_y1 = surface_z(x0, y1, True)
+                    z_top_x1y1 = surface_z(x1, y1, True)
+                    
+                    layer_factor = k / max(1, nz - 1)
+                    z_bot = [z_bot_local, z_bot_x1, z_bot_y1, z_bot_x1y1]
+                    z_top = [z_top_local, z_top_x1, z_top_y1, z_top_x1y1]
+                    
+                    z_bot_actual = [z + layer_factor * dz for z in z_bot]
+                    z_top_actual = [z + layer_factor * dz for z in z_top]
+                    
+                    corners = [
+                        (x0, y0, z_bot_actual[0]),
+                        (x1, y0, z_bot_actual[1]),
+                        (x1, y1, z_bot_actual[3]),
+                        (x0, y1, z_bot_actual[2]),
+                        (x0, y0, z_top_actual[0]),
+                        (x1, y0, z_top_actual[1]),
+                        (x1, y1, z_top_actual[3]),
+                        (x0, y1, z_top_actual[2]),
+                    ]
+                    
+                    cell.set_corners(corners)
+                    
+                    cx = (x0 + x1) / 2
+                    cy = (y0 + y1) / 2
+                    cz = (sum(z_bot_actual) + sum(z_top_actual)) / 8
+                    
+                    dist = math.sqrt((cx - well_x)**2 + (cy - well_y)**2 + (cz - well_z)**2)
+                    max_dist = math.sqrt(lx**2 + ly**2 + lz**2)
+                    
+                    base_pressure = 50.0
+                    max_pressure = 200.0
+                    pressure = base_pressure + (max_pressure - base_pressure) * (dist / max_dist)
+                    
+                    cell.pressure = pressure
+                    min_p = min(min_p, pressure)
+                    max_p = max(max_p, pressure)
+                    
+                    cpg.cells.append(cell)
+                    cell_id += 1
+        
+        cpg.min_pressure = min_p
+        cpg.max_pressure = max_p
+        
+        print(f"Generated {len(cpg.cells)} corner point cells with geological surface")
+        print(f"Pressure range: {min_p:.2f} - {max_p:.2f} bar")
+        
+        return cpg
     
     def create_toolbar(self):
         """创建顶部工具栏 - 与原文件一致"""
@@ -1216,6 +1372,10 @@ class MainWindow(QMainWindow):
             self.append_sim_status("Simulation is already running.")
             return
 
+        if self.current_algorithm == "black_oil_corner_grid":
+            self.run_corner_point_grid_simulation()
+            return
+
         params = self.collect_simulation_params()
         self.clear_cache()
         self.reset_progress_state()
@@ -1264,6 +1424,70 @@ class MainWindow(QMainWindow):
 
         self.run_btn.setEnabled(False)
         self.sim_process.start()
+    
+    def run_corner_point_grid_simulation(self):
+        """运行角点网格模拟（使用模拟数据）"""
+        self.clear_cache()
+        self.status_bar.showMessage("Running Corner Point Grid simulation...")
+        self.clear_sim_status()
+        
+        self.append_sim_status("=" * 50)
+        self.append_sim_status("  Corner Point Grid Simulation Starting...")
+        self.append_sim_status("=" * 50)
+        
+        params = self.collect_simulation_params()
+        nx = params.get('nx', 20)
+        ny = params.get('ny', 10)
+        nz = params.get('nz', 5)
+        lx = params.get('lx', 1000.0)
+        ly = params.get('ly', 500.0)
+        lz = params.get('lz', 100.0)
+        
+        self.append_sim_status(f"Grid: {nx}x{ny}x{nz}, Domain: {lx}x{ly}x{lz} m")
+        self.append_sim_status("Generating corner point grid with geological surface...")
+        
+        cpg = self.generate_mock_corner_point_grid(nx, ny, nz, lx, ly, lz)
+        
+        self.sim_data.corner_point_grid = cpg
+        self.sim_data.grid_info = {'nx': nx, 'ny': ny, 'nz': nz, 'Lx': lx, 'Ly': ly, 'Lz': lz}
+        
+        self.append_sim_status(f"Generated {len(cpg.cells)} cells")
+        self.append_sim_status(f"Pressure range: {cpg.min_pressure:.2f} - {cpg.max_pressure:.2f} bar")
+        self.append_sim_status("")
+        self.append_sim_status("=" * 50)
+        self.append_sim_status("  Simulation Completed Successfully!")
+        self.append_sim_status("=" * 50)
+        
+        self.vtk_renderer.render_corner_point_grid(self.sim_data)
+        self.update_corner_grid_statistics()
+        
+        self.status_bar.showMessage("Corner Point Grid simulation completed")
+    
+    def update_corner_grid_statistics(self):
+        """更新角点网格统计信息"""
+        if not self.sim_data.corner_point_grid:
+            return
+        
+        cpg = self.sim_data.corner_point_grid
+        
+        self.stats_text.clear()
+        self.stats_text.append(f"Grid: {cpg.nx} x {cpg.ny} x {cpg.nz} = {len(cpg.cells)} cells")
+        self.stats_text.append("")
+        self.stats_text.append("Pressure Range:")
+        self.stats_text.append(f"Min: {cpg.min_pressure:.2f} bar")
+        self.stats_text.append(f"Max: {cpg.max_pressure:.2f} bar")
+        
+        self.prop_table.setRowCount(5)
+        props = [
+            ("Algorithm", "Corner Point Grid"),
+            ("Grid Type", "Unstructured Hexahedra"),
+            ("Total Cells", str(len(cpg.cells))),
+            ("Active Cells", str(len(cpg.cells))),
+            ("Domain", f"{cpg.lx}x{cpg.ly}x{cpg.lz} m")
+        ]
+        for i, (prop, val) in enumerate(props):
+            self.prop_table.setItem(i, 0, QTableWidgetItem(prop))
+            self.prop_table.setItem(i, 1, QTableWidgetItem(val))
 
     def handle_process_output(self):
         """读取子进程输出并实时追加到状态面板。"""

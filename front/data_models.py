@@ -37,6 +37,91 @@ class OutputCapture:
         sys.stdout = self.original_stdout
 
 
+class CornerPointCell:
+    """角点网格单元数据结构
+    
+    角点编号约定：
+    底面(zmin): 0:(xmin,ymin) 1:(xmax,ymin) 2:(xmax,ymax) 3:(xmin,ymax)
+    顶面(zmax): 4:(xmin,ymin) 5:(xmax,ymin) 6:(xmax,ymax) 7:(xmin,ymax)
+    """
+    def __init__(self, cell_id=-1):
+        self.id = cell_id
+        self.corners = [(0.0, 0.0, 0.0) for _ in range(8)]
+        self.pressure = 0.0
+        self.ix = 0
+        self.iy = 0
+        self.iz = 0
+    
+    def set_corners(self, corners):
+        """设置8个角点坐标"""
+        if len(corners) == 8:
+            self.corners = [(c[0], c[1], c[2]) for c in corners]
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'corners': [list(c) for c in self.corners],
+            'pressure': self.pressure,
+            'ix': self.ix,
+            'iy': self.iy,
+            'iz': self.iz
+        }
+    
+    @classmethod
+    def from_dict(cls, data):
+        cell = cls(data.get('id', -1))
+        cell.corners = [tuple(c) for c in data.get('corners', [(0,0,0)]*8)]
+        cell.pressure = data.get('pressure', 0.0)
+        cell.ix = data.get('ix', 0)
+        cell.iy = data.get('iy', 0)
+        cell.iz = data.get('iz', 0)
+        return cell
+
+
+class CornerPointGridData:
+    """角点网格数据结构"""
+    def __init__(self):
+        self.nx = 20
+        self.ny = 10
+        self.nz = 5
+        self.lx = 1000.0
+        self.ly = 500.0
+        self.lz = 100.0
+        self.cells = []
+        self.fractures = []
+        self.min_pressure = 0.0
+        self.max_pressure = 200.0
+    
+    def to_dict(self):
+        return {
+            'nx': self.nx,
+            'ny': self.ny,
+            'nz': self.nz,
+            'lx': self.lx,
+            'ly': self.ly,
+            'lz': self.lz,
+            'cells': [c.to_dict() for c in self.cells],
+            'fractures': self.fractures,
+            'min_pressure': self.min_pressure,
+            'max_pressure': self.max_pressure
+        }
+    
+    @classmethod
+    def from_dict(cls, data):
+        grid = cls()
+        grid.nx = data.get('nx', 20)
+        grid.ny = data.get('ny', 10)
+        grid.nz = data.get('nz', 5)
+        grid.lx = data.get('lx', 1000.0)
+        grid.ly = data.get('ly', 500.0)
+        grid.lz = data.get('lz', 100.0)
+        grid.cells = [CornerPointCell.from_dict(c) for c in data.get('cells', [])]
+        grid.fractures = data.get('fractures', [])
+        grid.min_pressure = data.get('min_pressure', 0.0)
+        grid.max_pressure = data.get('max_pressure', 200.0)
+        return grid
+
+
 class SimulationData:
     """模拟数据结构"""
     def __init__(self):
@@ -46,8 +131,9 @@ class SimulationData:
         self.stress_field = []
         self.fractures = []
         self.wells = []
-        self.grid_lines = []  # LGR网格线数据
-        self.interpolated_pressure = []  # C++插值后的压力场数据
+        self.grid_lines = []
+        self.interpolated_pressure = []
+        self.corner_point_grid = None
         
     def generate_from_cpp(self, sim_result, nx, ny, nz, lx, ly, lz, grid_lines=None, interpolated_pressure=None):
         """从C++结果生成数据"""
@@ -137,6 +223,7 @@ class SimulationData:
                 for fracture in self.fractures
             ],
             'wells': list(self.wells),
+            'corner_point_grid': self.corner_point_grid.to_dict() if self.corner_point_grid else None,
         }
 
     def load_dict(self, payload):
@@ -157,6 +244,11 @@ class SimulationData:
             for fracture in payload.get('fractures', [])
         ]
         self.wells = list(payload.get('wells', []))
+        cpg_data = payload.get('corner_point_grid')
+        if cpg_data:
+            self.corner_point_grid = CornerPointGridData.from_dict(cpg_data)
+        else:
+            self.corner_point_grid = None
 
     def save_json(self, output_path):
         """将模拟结果写入JSON文件。"""

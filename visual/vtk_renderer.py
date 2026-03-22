@@ -377,3 +377,127 @@ class VTKRenderer:
             self.render_fractures(sim_data)
         self.setup_camera(sim_data)
         self.vtk_widget.iren.Render()
+    
+    def render_corner_point_grid(self, sim_data):
+        """渲染角点网格压力场
+        
+        使用vtkUnstructuredGrid渲染每个六面体单元，
+        支持非规则地质曲面（角点网格）
+        """
+        renderer = self.renderer
+        
+        if not sim_data.corner_point_grid or not sim_data.corner_point_grid.cells:
+            return
+        
+        cpg = sim_data.corner_point_grid
+        
+        data_hash = hash(str(len(cpg.cells)) + str(cpg.cells[0].corners[0]) if cpg.cells else 0)
+        
+        if self.cache['data_hash'] == data_hash and self.cache['pressure_actor'] is not None:
+            renderer.AddActor(self.cache['pressure_actor'])
+            if self.cache['scalar_bar']:
+                renderer.AddViewProp(self.cache['scalar_bar'])
+            self.setup_camera_for_corner_grid(cpg)
+            self.vtk_widget.iren.Render()
+            return
+        
+        renderer.RemoveAllViewProps()
+        
+        points = vtk.vtkPoints()
+        cells = vtk.vtkCellArray()
+        pressure_arr = vtk.vtkDoubleArray()
+        pressure_arr.SetName("Pressure")
+        
+        for cell in cpg.cells:
+            point_ids = []
+            for corner in cell.corners:
+                pid = points.InsertNextPoint(corner[0], corner[1], corner[2])
+                point_ids.append(pid)
+            
+            # VTK Hexahedron vertex order: 0,1,2,3,4,5,6,7
+            # Our corners: 0,1,2,3 (bottom), 4,5,6,7 (top)
+            # VTK expects: bottom face CCW, then top face CCW
+            cells.InsertNextCell(8)
+            for pid in point_ids:
+                cells.InsertCellPoint(pid)
+            
+            pressure_arr.InsertNextValue(cell.pressure)
+        
+        grid = vtk.vtkUnstructuredGrid()
+        grid.SetPoints(points)
+        grid.SetCells(vtk.VTK_HEXAHEDRON, cells)
+        grid.GetCellData().SetScalars(pressure_arr)
+        
+        min_p = cpg.min_pressure
+        max_p = cpg.max_pressure
+        
+        lut = vtk.vtkLookupTable()
+        lut.SetTableRange(min_p, max_p)
+        lut.SetHueRange(0.667, 0.0)
+        lut.SetSaturationRange(1.0, 1.0)
+        lut.SetValueRange(1.0, 1.0)
+        lut.SetNumberOfTableValues(256)
+        lut.Build()
+        
+        scalar_bar = vtk.vtkScalarBarActor()
+        scalar_bar.SetLookupTable(lut)
+        scalar_bar.SetTitle("Pressure (bar)")
+        scalar_bar.SetNumberOfLabels(6)
+        scalar_bar.SetWidth(0.08)
+        scalar_bar.SetHeight(0.4)
+        scalar_bar.GetLabelTextProperty().SetColor(1, 1, 1)
+        scalar_bar.GetTitleTextProperty().SetColor(1, 1, 1)
+        scalar_bar.SetPosition(0.88, 0.25)
+        renderer.AddViewProp(scalar_bar)
+        
+        mapper = vtk.vtkDataSetMapper()
+        mapper.SetInputData(grid)
+        mapper.SetLookupTable(lut)
+        mapper.SetScalarRange(min_p, max_p)
+        mapper.SetScalarModeToUseCellData()
+        
+        actor = vtk.vtkActor()
+        actor.SetMapper(mapper)
+        actor.GetProperty().SetOpacity(0.9)
+        actor.GetProperty().SetEdgeVisibility(1)
+        actor.GetProperty().SetEdgeColor(0.3, 0.3, 0.3)
+        actor.GetProperty().SetLineWidth(0.5)
+        
+        renderer.AddActor(actor)
+        
+        self.cache['data_hash'] = data_hash
+        self.cache['pressure_actor'] = actor
+        self.cache['scalar_bar'] = scalar_bar
+        
+        self.setup_camera_for_corner_grid(cpg)
+        self.vtk_widget.iren.Render()
+    
+    def setup_camera_for_corner_grid(self, cpg):
+        """为角点网格设置相机"""
+        camera = self.renderer.GetActiveCamera()
+        
+        min_x = min_y = min_z = float('inf')
+        max_x = max_y = max_z = float('-inf')
+        
+        for cell in cpg.cells:
+            for corner in cell.corners:
+                min_x = min(min_x, corner[0])
+                max_x = max(max_x, corner[0])
+                min_y = min(min_y, corner[1])
+                max_y = max(max_y, corner[1])
+                min_z = min(min_z, corner[2])
+                max_z = max(max_z, corner[2])
+        
+        cx = (min_x + max_x) / 2.0
+        cy = (min_y + max_y) / 2.0
+        cz = (min_z + max_z) / 2.0
+        
+        max_dim = max(max_x - min_x, max_y - min_y, max_z - min_z)
+        dist = max_dim * 2.5
+        
+        camera.SetPosition(cx + dist, cy + dist, cz + dist)
+        camera.SetFocalPoint(cx, cy, cz)
+        camera.SetViewUp(0, 0, 1)
+        
+        self.renderer.ResetCamera()
+        camera.Zoom(1.1)
