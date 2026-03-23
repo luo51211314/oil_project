@@ -1338,7 +1338,7 @@ public:
     void setupWells() {
         wells.clear();
         well_map.clear();
-        std::vector<int> target_fracs = {100,101,102};
+        std::vector<int> target_fracs = {10000, 10001, 10002};
         for (int fid : target_fracs) {
             int best_s = -1;
             double best = 1e30;
