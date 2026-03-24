@@ -4,6 +4,8 @@ project(edfm_python_bindings)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+include(CheckIPOSupported)
+
 # 添加Eigen
 # lxw
 # set(EIGEN3_INCLUDE_DIR "D:/eigen-3.3.8")
@@ -40,4 +42,23 @@ target_link_libraries(edfm_core PRIVATE pybind11::module)
 
 target_include_directories(edfm_core_corner PRIVATE ${EIGEN3_INCLUDE_DIR})
 target_link_libraries(edfm_core_corner PRIVATE pybind11::module)
+
+if(MSVC)
+    check_ipo_supported(RESULT msipo_supported OUTPUT msipo_error LANGUAGES CXX)
+    if(msipo_supported)
+        set_property(TARGET edfm_core PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+        set_property(TARGET edfm_core_corner PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+    else()
+        message(WARNING "MSVC IPO/LTO is not supported: ${msipo_error}")
+    endif()
+
+    foreach(target_name IN ITEMS edfm_core edfm_core_corner)
+        target_compile_options(${target_name} PRIVATE
+            $<$<CONFIG:Release>:/GL /Oi /Ot /Gy /Gw /arch:AVX2>
+        )
+        target_link_options(${target_name} PRIVATE
+            $<$<CONFIG:Release>:/LTCG /OPT:REF /OPT:ICF>
+        )
+    endforeach()
+endif()
 
