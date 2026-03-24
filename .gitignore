@@ -47,6 +47,7 @@ _deps/
 
 # Build directories
 build/
+build_nmake_release/
 Debug/
 Release/
 RelWithDebInfo/
