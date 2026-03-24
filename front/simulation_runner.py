@@ -47,6 +47,13 @@ def run_simulation(params):
     well_y = float(params['well_y'])
     well_z = float(params['well_z'])
     well_pressure = float(params['well_pressure'])
+    region_num_fracs = int(params.get('region_num_fracs', 0))
+    region_x_min = float(params.get('region_x_min', 0.0))
+    region_x_max = float(params.get('region_x_max', 0.0))
+    region_y_min = float(params.get('region_y_min', 0.0))
+    region_y_max = float(params.get('region_y_max', 0.0))
+    region_z_min = float(params.get('region_z_min', 0.0))
+    region_z_max = float(params.get('region_z_max', 0.0))
 
     if HAS_CPP_MODULE:
         sim = edfm_core.EDFMSimulator()
@@ -54,6 +61,16 @@ def run_simulation(params):
         sim.setFractureParameters(num_fracs, min_len, max_len, math.pi / 3.0, 0.0, math.pi, aperture, 10000.0)
         sim.setSimulationParameters(100.0, 1.0, 0.2, 0.001, 0.001, 0.0001)
         sim.setWellParameters(well_x, well_y, well_z, 0.05, well_pressure)
+        if region_num_fracs > 0:
+            if hasattr(sim, 'setRegionFractureParameters'):
+                sim.setRegionFractureParameters(
+                    region_num_fracs,
+                    region_x_min, region_x_max,
+                    region_y_min, region_y_max,
+                    region_z_min, region_z_max,
+                )
+            else:
+                print("WARNING: edfm_core missing setRegionFractureParameters(); region fractures disabled")
         result = sim.runSimulation()
         grid_lines = []
         interpolated_pressure = []

@@ -165,9 +165,8 @@ class MainWindow(QMainWindow):
         self.corner_selection_actor = None
         self.corner_selection_outline_actor = None
         self.corner_selection_handle_actor = None
-        self.corner_selection_params = None
-        self.corner_selection_toggle_btn = None
-        self.corner_selection_status_label = None
+        self.selection_tool_controls = {}
+        self.selection_params_by_algorithm = {}
         
         # 缓存VTK对象，避免重复生成
         self.cache = {
@@ -270,6 +269,8 @@ class MainWindow(QMainWindow):
     
     def on_algorithm_changed(self, algo):
         """算法切换回调"""
+        if self.corner_selection_mode_active:
+            self.deactivate_corner_rectangle_selection_mode()
         self.current_algorithm = algo
         self.update_algorithm_parameter_pages()
         self.switch_tab(self.current_tab)
@@ -1175,8 +1176,8 @@ class MainWindow(QMainWindow):
         group.setLayout(vlayout)
         layout.addWidget(group)
 
-        if algorithm_key == "black_oil_corner_grid":
-            layout.addWidget(self.create_corner_selection_tools_group())
+        if algorithm_key in {"black_oil", "black_oil_corner_grid"}:
+            layout.addWidget(self.create_selection_tools_group(algorithm_key))
 
         layout.addStretch()
 
@@ -1189,15 +1190,15 @@ class MainWindow(QMainWindow):
         )
         return page
 
-    def create_corner_selection_tools_group(self):
-        """创建 Corner Grid 结果页的框选工具分组。"""
+    def create_selection_tools_group(self, algorithm_key):
+        """创建结果页的框选工具分组。"""
         group = QGroupBox("Selection Tools")
         group.setStyleSheet(self.groupbox_style())
         layout = QVBoxLayout()
 
-        self.corner_selection_toggle_btn = QPushButton("开始矩形框选")
-        self.corner_selection_toggle_btn.setCheckable(True)
-        self.corner_selection_toggle_btn.setStyleSheet("""
+        toggle_btn = QPushButton("开始矩形框选")
+        toggle_btn.setCheckable(True)
+        toggle_btn.setStyleSheet("""
             QPushButton {
                 background-color: #3d3d3d;
                 color: #cccccc;
@@ -1213,14 +1214,19 @@ class MainWindow(QMainWindow):
                 color: white;
             }
         """)
-        self.corner_selection_toggle_btn.toggled.connect(self.toggle_corner_rectangle_selection_mode)
+        toggle_btn.toggled.connect(self.toggle_corner_rectangle_selection_mode)
 
-        self.corner_selection_status_label = QLabel("未选择区域")
-        self.corner_selection_status_label.setWordWrap(True)
-        self.corner_selection_status_label.setStyleSheet("color: #8f8f8f; padding: 4px 0;")
+        status_label = QLabel("未选择区域")
+        status_label.setWordWrap(True)
+        status_label.setStyleSheet("color: #8f8f8f; padding: 4px 0;")
 
-        layout.addWidget(self.corner_selection_toggle_btn)
-        layout.addWidget(self.corner_selection_status_label)
+        self.selection_tool_controls[algorithm_key] = {
+            'toggle_btn': toggle_btn,
+            'status_label': status_label,
+        }
+
+        layout.addWidget(toggle_btn)
+        layout.addWidget(status_label)
         group.setLayout(layout)
         return group
 
@@ -1456,9 +1462,7 @@ class MainWindow(QMainWindow):
     
     def switch_tab(self, tab_name):
         """切换标签页 - 与原文件一致"""
-        should_keep_selection = (
-            self.current_algorithm == "black_oil_corner_grid" and tab_name == "Results"
-        )
+        should_keep_selection = (tab_name == "Results" and self.current_algorithm in {"black_oil", "black_oil_corner_grid"})
         if self.corner_selection_mode_active and not should_keep_selection:
             self.deactivate_corner_rectangle_selection_mode()
 
@@ -1468,6 +1472,7 @@ class MainWindow(QMainWindow):
         
         tab_index = {"Grid": 0, "Wells": 1, "Fractures": 2, "Results": 3}
         self.get_active_param_stack().setCurrentIndex(tab_index.get(tab_name, 0))
+        self.sync_selection_tool_status()
     
     def append_sim_status(self, text):
         """添加模拟状态信息 - 与原文件一致"""
@@ -1487,7 +1492,7 @@ class MainWindow(QMainWindow):
         self.cache['grid_lines_actor'] = None
         self.cache['data_hash'] = None
         self.deactivate_corner_rectangle_selection_mode(restore_camera=False, clear_actor=True)
-        self.clear_corner_selection_overlay(clear_params=True)
+        self.clear_corner_selection_overlay(clear_params=False)
         if hasattr(self, 'vtk_renderer'):
             self.vtk_renderer.clear_cache()
         print("Cache cleared")
@@ -1594,7 +1599,34 @@ class MainWindow(QMainWindow):
             params.update(self.collect_unrefined_fractures_params())
             params.update(self.collect_unrefined_wells_params())
 
+        if self.current_algorithm == "black_oil":
+            params.update(self.collect_black_oil_region_fracture_params(params))
+
         return params
+
+    def collect_black_oil_region_fracture_params(self, params):
+        """将 Black Oil 的框选区域参数整理成算法输入。"""
+        selection = self.selection_params_by_algorithm.get("black_oil")
+        if not selection:
+            return {
+                'region_num_fracs': 0,
+                'region_x_min': 0.0,
+                'region_x_max': 0.0,
+                'region_y_min': 0.0,
+                'region_y_max': 0.0,
+                'region_z_min': 0.0,
+                'region_z_max': 0.0,
+            }
+
+        return {
+            'region_num_fracs': int(selection['N']),
+            'region_x_min': float(selection['x1']),
+            'region_x_max': float(selection['x2']),
+            'region_y_min': float(selection['y1']),
+            'region_y_max': float(selection['y2']),
+            'region_z_min': 0.0,
+            'region_z_max': float(params['lz']),
+        }
 
     def run_simulation(self):
         """通过子进程运行模拟，并实时显示算法输出。"""
@@ -1627,6 +1659,16 @@ class MainWindow(QMainWindow):
             f"Well: ({params['well_x']}, {params['well_y']}, {params['well_z']}), "
             f"Pressure: {params['well_pressure']} bar"
         )
+        if params.get('region_num_fracs', 0) > 0:
+            self.append_sim_status(
+                "Region Fractures: "
+                f"N={params['region_num_fracs']}, "
+                f"X[{params['region_x_min']:.2f}, {params['region_x_max']:.2f}], "
+                f"Y[{params['region_y_min']:.2f}, {params['region_y_max']:.2f}], "
+                f"Z[{params['region_z_min']:.2f}, {params['region_z_max']:.2f}]"
+            )
+        else:
+            self.append_sim_status("Region Fractures: disabled")
         self.append_sim_status("")
 
         tmp_dir = os.path.join(self.project_root, '.tmp')
@@ -1842,7 +1884,7 @@ class MainWindow(QMainWindow):
 
     def activate_corner_rectangle_selection_mode(self):
         """进入 Corner Grid 的矩形框选模式。"""
-        if self.current_algorithm != "black_oil_corner_grid":
+        if self.current_algorithm not in {"black_oil", "black_oil_corner_grid"}:
             self.set_corner_selection_toggle_button(False)
             return
 
@@ -1851,12 +1893,12 @@ class MainWindow(QMainWindow):
             return
 
         if not self.has_corner_selection_data():
-            self.update_corner_selection_status("请先运行 Corner Grid 模拟后再进行框选。")
-            self.status_bar.showMessage("Corner Grid selection unavailable")
+            self.update_corner_selection_status("请先运行当前算法模拟后再进行框选。")
+            self.status_bar.showMessage("Selection unavailable")
             self.set_corner_selection_toggle_button(False)
             return
 
-        controls = getattr(self, 'results_controls', {}).get("black_oil_corner_grid", {})
+        controls = getattr(self, 'results_controls', {}).get(self.current_algorithm, {})
         view_mode_combo = controls.get('view_mode_combo')
         combo_field = controls.get('combo_field')
         if view_mode_combo and view_mode_combo.currentText() != "Pressure Field":
@@ -1911,7 +1953,7 @@ class MainWindow(QMainWindow):
             self.restore_camera_state(self.corner_selection_saved_camera)
         self.corner_selection_saved_camera = None
 
-        if clear_actor or self.corner_selection_params is None:
+        if clear_actor or self.get_current_selection_params() is None:
             self.clear_corner_selection_overlay(clear_params=False)
 
         if hasattr(self, 'vtk_widget'):
@@ -1976,11 +2018,8 @@ class MainWindow(QMainWindow):
             self.deactivate_corner_rectangle_selection_mode()
             return
 
-        self.corner_selection_params = params
-        self.update_corner_selection_status(
-            f"区域: ({params['x1']:.2f}, {params['y1']:.2f}) -> "
-            f"({params['x2']:.2f}, {params['y2']:.2f}), N = {params['N']}"
-        )
+        self.selection_params_by_algorithm[self.current_algorithm] = params
+        self.sync_selection_tool_status()
         self.deactivate_corner_rectangle_selection_mode()
 
     def display_to_corner_world_xy(self, display_x, display_y):
@@ -2029,26 +2068,31 @@ class MainWindow(QMainWindow):
 
     def get_corner_selection_world_bounds(self):
         """获取 Corner Grid 当前可框选的世界坐标边界。"""
-        cpg = self.sim_data.corner_point_grid
-        if cpg and cpg.cells:
-            min_x = min_y = min_z = float('inf')
-            max_x = max_y = max_z = float('-inf')
-            for cell in cpg.cells:
-                for corner in cell.corners:
-                    min_x = min(min_x, corner[0])
-                    max_x = max(max_x, corner[0])
-                    min_y = min(min_y, corner[1])
-                    max_y = max(max_y, corner[1])
-                    min_z = min(min_z, corner[2])
-                    max_z = max(max_z, corner[2])
-            return min_x, max_x, min_y, max_y, min_z, max_z
+        if self.current_algorithm == "black_oil_corner_grid":
+            cpg = self.sim_data.corner_point_grid
+            if cpg and cpg.cells:
+                min_x = min_y = min_z = float('inf')
+                max_x = max_y = max_z = float('-inf')
+                for cell in cpg.cells:
+                    for corner in cell.corners:
+                        min_x = min(min_x, corner[0])
+                        max_x = max(max_x, corner[0])
+                        min_y = min(min_y, corner[1])
+                        max_y = max(max_y, corner[1])
+                        min_z = min(min_z, corner[2])
+                        max_z = max(max_z, corner[2])
+                return min_x, max_x, min_y, max_y, min_z, max_z
 
         info = self.sim_data.grid_info
         return 0.0, float(info['Lx']), 0.0, float(info['Ly']), 0.0, float(info['Lz'])
 
     def has_corner_selection_data(self):
         """判断 Corner Grid 是否已有可供框选的结果数据。"""
-        return bool(self.sim_data.corner_point_grid and self.sim_data.corner_point_grid.cells)
+        if self.current_algorithm == "black_oil_corner_grid":
+            return bool(self.sim_data.corner_point_grid and self.sim_data.corner_point_grid.cells)
+        if self.current_algorithm == "black_oil":
+            return bool(self.sim_data.pressure_field)
+        return False
 
     def capture_camera_state(self):
         """保存当前相机状态，便于退出框选模式后恢复。"""
@@ -2218,12 +2262,13 @@ class MainWindow(QMainWindow):
 
     def reapply_corner_selection_overlay(self):
         """在重新渲染后恢复已确认的 Corner Grid 选区高亮。"""
-        if not self.corner_selection_params:
+        params = self.get_current_selection_params()
+        if not params:
             return
 
         self.update_corner_selection_preview(
-            (self.corner_selection_params['x1'], self.corner_selection_params['y1']),
-            (self.corner_selection_params['x2'], self.corner_selection_params['y2']),
+            (params['x1'], params['y1']),
+            (params['x2'], params['y2']),
             finalized=True,
         )
 
@@ -2240,24 +2285,49 @@ class MainWindow(QMainWindow):
         self.corner_selection_handle_actor = None
         self.corner_selection_cube_source = None
         if clear_params:
-            self.corner_selection_params = None
+            self.selection_params_by_algorithm.pop(self.current_algorithm, None)
             self.update_corner_selection_status("未选择区域")
         if hasattr(self, 'vtk_widget'):
             self.vtk_widget.iren.Render()
 
     def update_corner_selection_status(self, text):
         """更新 Corner Grid 框选工具的状态文字。"""
-        if self.corner_selection_status_label is not None:
-            self.corner_selection_status_label.setText(text)
+        controls = self.get_selection_tool_controls()
+        if controls and controls.get('status_label') is not None:
+            controls['status_label'].setText(text)
 
     def set_corner_selection_toggle_button(self, checked):
         """同步 Corner Grid 框选按钮状态，避免递归触发。"""
-        if self.corner_selection_toggle_btn is None:
+        controls = self.get_selection_tool_controls()
+        toggle_btn = controls.get('toggle_btn') if controls else None
+        if toggle_btn is None:
             return
-        self.corner_selection_toggle_btn.blockSignals(True)
-        self.corner_selection_toggle_btn.setChecked(checked)
-        self.corner_selection_toggle_btn.setText("退出矩形框选" if checked else "开始矩形框选")
-        self.corner_selection_toggle_btn.blockSignals(False)
+        toggle_btn.blockSignals(True)
+        toggle_btn.setChecked(checked)
+        toggle_btn.setText("退出矩形框选" if checked else "开始矩形框选")
+        toggle_btn.blockSignals(False)
+
+    def get_selection_tool_controls(self, algorithm_key=None):
+        """获取指定算法的框选工具控件。"""
+        return self.selection_tool_controls.get(algorithm_key or self.current_algorithm)
+
+    def get_current_selection_params(self):
+        """获取当前算法的框选参数。"""
+        return self.selection_params_by_algorithm.get(self.current_algorithm)
+
+    def sync_selection_tool_status(self):
+        """根据当前算法已保存的选区，刷新工具区状态文本。"""
+        params = self.get_current_selection_params()
+        if not params:
+            self.update_corner_selection_status("未选择区域")
+            return
+        status = (
+            f"区域: ({params['x1']:.2f}, {params['y1']:.2f}) -> "
+            f"({params['x2']:.2f}, {params['y2']:.2f}), N = {params['N']}"
+        )
+        if self.current_algorithm == "black_oil":
+            status += "\n将于下次运行时应用。"
+        self.update_corner_selection_status(status)
 
     def open_corner_selection_parameter_dialog(self, bounds):
         """弹出矩形框选参数输入窗，返回确认后的参数。"""
@@ -2341,6 +2411,7 @@ class MainWindow(QMainWindow):
             self.reapply_corner_selection_overlay()
             return
         self.vtk_renderer.render_mode3_smooth_pressure(self.sim_data)
+        self.reapply_corner_selection_overlay()
     
     def render_fractures(self):
         """渲染裂缝"""
