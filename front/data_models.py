@@ -259,3 +259,142 @@ class SimulationData:
         """从JSON文件加载模拟结果。"""
         with open(input_path, 'r', encoding='utf-8') as fp:
             self.load_dict(json.load(fp))
+
+
+def load_corner_point_grid_from_csv(coord_csv_path, zcorn_csv_path):
+    """从COORD和ZCORN CSV文件加载角点网格数据
+    
+    Args:
+        coord_csv_path: COORD文件路径，包含网格点坐标
+        zcorn_csv_path: ZCORN文件路径，包含每个单元的8个Z值
+    
+    Returns:
+        CornerPointGridData对象
+    """
+    import csv
+    
+    grid = CornerPointGridData()
+    
+    coord_data = {}
+    with open(coord_csv_path, 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            # 获取列名（处理可能的BOM或特殊字符）
+            keys = list(row.keys())
+            xi = int(row[keys[0]])  # X(I)
+            yj = int(row[keys[1]])  # Y(J)
+            zk = row[keys[2]].strip()       # Z(K) - 去除空白字符
+            x = float(row[keys[3]]) # 坐标X
+            y = float(row[keys[4]]) # 坐标Y
+            z = float(row[keys[5]]) # 坐标Z
+            
+            key = (xi, yj, zk)
+            coord_data[key] = (x, y, z)
+    
+    # 调试：打印前几个COORD数据
+    print(f"COORD data samples (total {len(coord_data)} points):")
+    for i, (k, v) in enumerate(list(coord_data.items())[:5]):
+        print(f"  {k} -> {v}")
+    
+    max_i = max(k[0] for k in coord_data.keys())
+    max_j = max(k[1] for k in coord_data.keys())
+    
+    zcorn_data = {}
+    with open(zcorn_csv_path, 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            keys = list(row.keys())
+            xi = int(row[keys[0]])  # X(I)
+            yj = int(row[keys[1]])  # Y(J)
+            zk = int(row[keys[2]])  # Z(K)
+            z_values = [float(row[keys[i]]) for i in range(3, 11)]  # Z1-Z8
+            zcorn_data[(xi, yj, zk)] = z_values
+    
+    if zcorn_data:
+        max_k = max(k[2] for k in zcorn_data.keys())
+    else:
+        max_k = 1
+    
+    # COORD定义的是柱子坐标，每个柱子有顶和底
+    # 柱子数量 = max_i x max_j
+    # 单元数量 = (max_i - 1) x (max_j - 1) x max_k (从ZCORN确定)
+    
+    # 从ZCORN确定实际的网格维度
+    if zcorn_data:
+        zcorn_max_i = max(k[0] for k in zcorn_data.keys())
+        zcorn_max_j = max(k[1] for k in zcorn_data.keys())
+        zcorn_max_k = max(k[2] for k in zcorn_data.keys())
+        grid.nx = zcorn_max_i
+        grid.ny = zcorn_max_j
+        grid.nz = zcorn_max_k
+    else:
+        grid.nx = max_i - 1
+        grid.ny = max_j - 1
+        grid.nz = max_k
+    
+    all_x = [c[0] for c in coord_data.values()]
+    all_y = [c[1] for c in coord_data.values()]
+    all_z = [c[2] for c in coord_data.values()]
+    grid.lx = max(all_x) - min(all_x) if all_x else 1000.0
+    grid.ly = max(all_y) - min(all_y) if all_y else 500.0
+    grid.lz = max(all_z) - min(all_z) if all_z else 100.0
+    
+    print(f"Grid dimensions: {grid.nx}x{grid.ny}x{grid.nz}")
+    print(f"COORD dimensions: {max_i}x{max_j}")
+    
+    cell_id = 0
+    for iz in range(1, grid.nz + 1):
+        for iy in range(1, grid.ny + 1):
+            for ix in range(1, grid.nx + 1):
+                cell = CornerPointCell(cell_id)
+                cell.ix = ix - 1
+                cell.iy = iy - 1
+                cell.iz = iz - 1
+                
+                zcorn = zcorn_data.get((ix, iy, iz), [0]*8)
+                
+                # 获取当前单元的8个角点坐标
+                # 角点顺序: 底面4个(逆时针), 顶面4个(逆时针)
+                # p0-p3: 底面, p4-p7: 顶面
+                # ZCORN顺序: Z1-Z4是顶面，Z5-Z8是底面
+                
+                # 从COORD获取XY坐标 (柱子坐标)
+                # 单元(ix,iy)的4个角对应柱子: (ix,iy), (ix+1,iy), (ix+1,iy+1), (ix,iy+1)
+                p0_xy = coord_data.get((ix, iy, '底'), coord_data.get((ix, iy, 'bottom'), None))
+                p1_xy = coord_data.get((ix + 1, iy, '底'), coord_data.get((ix + 1, iy, 'bottom'), None))
+                p2_xy = coord_data.get((ix + 1, iy + 1, '底'), coord_data.get((ix + 1, iy + 1, 'bottom'), None))
+                p3_xy = coord_data.get((ix, iy + 1, '底'), coord_data.get((ix, iy + 1, 'bottom'), None))
+                
+                p4_xy = coord_data.get((ix, iy, '顶'), coord_data.get((ix, iy, 'top'), None))
+                p5_xy = coord_data.get((ix + 1, iy, '顶'), coord_data.get((ix + 1, iy, 'top'), None))
+                p6_xy = coord_data.get((ix + 1, iy + 1, '顶'), coord_data.get((ix + 1, iy + 1, 'top'), None))
+                p7_xy = coord_data.get((ix, iy + 1, '顶'), coord_data.get((ix, iy + 1, 'top'), None))
+                
+                # 组合XYZ坐标 (XY来自COORD, Z来自ZCORN)
+                # ZCORN: Z1,Z2,Z3,Z4是顶面(从西北开始顺时针), Z5,Z6,Z7,Z8是底面
+                p0 = (p0_xy[0] if p0_xy else 0, p0_xy[1] if p0_xy else 0, zcorn[4])  # Z5
+                p1 = (p1_xy[0] if p1_xy else 0, p1_xy[1] if p1_xy else 0, zcorn[5])  # Z6
+                p2 = (p2_xy[0] if p2_xy else 0, p2_xy[1] if p2_xy else 0, zcorn[6])  # Z7
+                p3 = (p3_xy[0] if p3_xy else 0, p3_xy[1] if p3_xy else 0, zcorn[7])  # Z8
+                p4 = (p4_xy[0] if p4_xy else 0, p4_xy[1] if p4_xy else 0, zcorn[0])  # Z1
+                p5 = (p5_xy[0] if p5_xy else 0, p5_xy[1] if p5_xy else 0, zcorn[1])  # Z2
+                p6 = (p6_xy[0] if p6_xy else 0, p6_xy[1] if p6_xy else 0, zcorn[2])  # Z3
+                p7 = (p7_xy[0] if p7_xy else 0, p7_xy[1] if p7_xy else 0, zcorn[3])  # Z4
+                
+                cell.corners = [p0, p1, p2, p3, p4, p5, p6, p7]
+                
+                # 默认压力值（仅用于占位）
+                cell.pressure = 100.0
+                
+                grid.cells.append(cell)
+                cell_id += 1
+    
+    if grid.cells:
+        pressures = [c.pressure for c in grid.cells]
+        grid.min_pressure = min(pressures)
+        grid.max_pressure = max(pressures)
+    
+    print(f"Loaded {len(grid.cells)} corner point cells from CSV")
+    print(f"Grid dimensions: {grid.nx}x{grid.ny}x{grid.nz}")
+    
+    return grid

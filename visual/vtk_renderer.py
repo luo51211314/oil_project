@@ -379,10 +379,11 @@ class VTKRenderer:
         self.vtk_widget.iren.Render()
     
     def render_corner_point_grid(self, sim_data):
-        """渲染角点网格压力场
+        """渲染角点网格几何模型
         
         使用vtkUnstructuredGrid渲染每个六面体单元，
-        支持非规则地质曲面（角点网格）
+        显示角点网格的几何结构（灰色，无压力场）
+        对Z轴进行垂直夸张以显示地形变化
         """
         renderer = self.renderer
         
@@ -393,87 +394,87 @@ class VTKRenderer:
         
         data_hash = hash(str(len(cpg.cells)) + str(cpg.cells[0].corners[0]) if cpg.cells else 0)
         
-        if self.cache['data_hash'] == data_hash and self.cache['pressure_actor'] is not None:
-            renderer.AddActor(self.cache['pressure_actor'])
-            if self.cache['scalar_bar']:
-                renderer.AddViewProp(self.cache['scalar_bar'])
+        if self.cache.get('corner_grid_hash') == data_hash and self.cache.get('corner_actor') is not None:
+            renderer.AddActor(self.cache['corner_actor'])
             self.setup_camera_for_corner_grid(cpg)
             self.vtk_widget.iren.Render()
             return
         
         renderer.RemoveAllViewProps()
         
+        # 计算Z轴夸张系数
+        all_x = [c[0] for cell in cpg.cells for c in cell.corners]
+        all_y = [c[1] for cell in cpg.cells for c in cell.corners]
+        all_z = [c[2] for cell in cpg.cells for c in cell.corners]
+        dx = max(all_x) - min(all_x)
+        dy = max(all_y) - min(all_y)
+        dz = max(all_z) - min(all_z)
+        
+        # 垂直夸张：让Z方向的变化与XY方向相当
+        z_exaggeration = max(dx, dy) / dz * 0.3 if dz > 0 else 1.0
+        z_exaggeration = min(z_exaggeration, 50)  # 限制最大夸张倍数
+        
+        print(f"Z exaggeration: {z_exaggeration:.1f}x")
+        
         points = vtk.vtkPoints()
         cells = vtk.vtkCellArray()
-        pressure_arr = vtk.vtkDoubleArray()
-        pressure_arr.SetName("Pressure")
         
         for cell in cpg.cells:
             point_ids = []
             for corner in cell.corners:
-                pid = points.InsertNextPoint(corner[0], corner[1], corner[2])
+                # 应用Z轴夸张
+                pid = points.InsertNextPoint(corner[0], corner[1], corner[2] * z_exaggeration)
                 point_ids.append(pid)
             
             # VTK Hexahedron vertex order: 0,1,2,3,4,5,6,7
-            # Our corners: 0,1,2,3 (bottom), 4,5,6,7 (top)
-            # VTK expects: bottom face CCW, then top face CCW
             cells.InsertNextCell(8)
             for pid in point_ids:
                 cells.InsertCellPoint(pid)
-            
-            pressure_arr.InsertNextValue(cell.pressure)
         
         grid = vtk.vtkUnstructuredGrid()
         grid.SetPoints(points)
         grid.SetCells(vtk.VTK_HEXAHEDRON, cells)
-        grid.GetCellData().SetScalars(pressure_arr)
         
-        min_p = cpg.min_pressure
-        max_p = cpg.max_pressure
+        # 创建线框显示 - 提取所有边
+        extract_edges = vtk.vtkExtractEdges()
+        extract_edges.SetInputData(grid)
+        extract_edges.Update()
         
-        lut = vtk.vtkLookupTable()
-        lut.SetTableRange(min_p, max_p)
-        lut.SetHueRange(0.667, 0.0)
-        lut.SetSaturationRange(1.0, 1.0)
-        lut.SetValueRange(1.0, 1.0)
-        lut.SetNumberOfTableValues(256)
-        lut.Build()
-        
-        scalar_bar = vtk.vtkScalarBarActor()
-        scalar_bar.SetLookupTable(lut)
-        scalar_bar.SetTitle("Pressure (bar)")
-        scalar_bar.SetNumberOfLabels(6)
-        scalar_bar.SetWidth(0.08)
-        scalar_bar.SetHeight(0.4)
-        scalar_bar.GetLabelTextProperty().SetColor(1, 1, 1)
-        scalar_bar.GetTitleTextProperty().SetColor(1, 1, 1)
-        scalar_bar.SetPosition(0.88, 0.25)
-        renderer.AddViewProp(scalar_bar)
-        
+        # 使用白色线框显示
         mapper = vtk.vtkDataSetMapper()
-        mapper.SetInputData(grid)
-        mapper.SetLookupTable(lut)
-        mapper.SetScalarRange(min_p, max_p)
-        mapper.SetScalarModeToUseCellData()
+        mapper.SetInputConnection(extract_edges.GetOutputPort())
         
         actor = vtk.vtkActor()
         actor.SetMapper(mapper)
-        actor.GetProperty().SetOpacity(0.9)
-        actor.GetProperty().SetEdgeVisibility(1)
-        actor.GetProperty().SetEdgeColor(0.3, 0.3, 0.3)
-        actor.GetProperty().SetLineWidth(0.5)
+        actor.GetProperty().SetColor(1.0, 1.0, 1.0)  # 白色线框
+        actor.GetProperty().SetLineWidth(1.0)
         
         renderer.AddActor(actor)
         
-        self.cache['data_hash'] = data_hash
-        self.cache['pressure_actor'] = actor
-        self.cache['scalar_bar'] = scalar_bar
+        # 同时添加半透明表面，增加立体感
+        geom_filter = vtk.vtkGeometryFilter()
+        geom_filter.SetInputData(grid)
+        geom_filter.Update()
+        
+        surface_mapper = vtk.vtkDataSetMapper()
+        surface_mapper.SetInputConnection(geom_filter.GetOutputPort())
+        
+        surface_actor = vtk.vtkActor()
+        surface_actor.SetMapper(surface_mapper)
+        surface_actor.GetProperty().SetColor(0.5, 0.5, 0.5)  # 中灰色表面
+        surface_actor.GetProperty().SetOpacity(0.15)  # 很透明
+        surface_actor.GetProperty().SetEdgeVisibility(0)
+        
+        renderer.AddActor(surface_actor)
+        
+        self.cache['corner_grid_hash'] = data_hash
+        self.cache['corner_actor'] = actor
         
         self.setup_camera_for_corner_grid(cpg)
         self.vtk_widget.iren.Render()
     
     def setup_camera_for_corner_grid(self, cpg):
-        """为角点网格设置相机"""
+        """为角点网格设置相机 - 优化视角以显示Z方向变化"""
         camera = self.renderer.GetActiveCamera()
         
         min_x = min_y = min_z = float('inf')
@@ -492,12 +493,27 @@ class VTKRenderer:
         cy = (min_y + max_y) / 2.0
         cz = (min_z + max_z) / 2.0
         
-        max_dim = max(max_x - min_x, max_y - min_y, max_z - min_z)
-        dist = max_dim * 2.5
+        dx = max_x - min_x
+        dy = max_y - min_y
+        dz = max_z - min_z
         
-        camera.SetPosition(cx + dist, cy + dist, cz + dist)
-        camera.SetFocalPoint(cx, cy, cz)
-        camera.SetViewUp(0, 0, 1)
+        # 计算Z方向相对于XY的比例，如果Z很小，使用侧视图
+        z_ratio = dz / max(dx, dy) if max(dx, dy) > 0 else 1.0
+        
+        if z_ratio < 0.1:
+            # Z方向很小，使用倾斜侧视图（从侧面看，带一点角度）
+            dist = max(dx, dy) * 1.8
+            # 从Y负方向看，同时向X方向偏移一点，抬高Z
+            camera.SetPosition(cx + dx * 0.3, cy - dist, cz + dz * 8)
+            camera.SetFocalPoint(cx, cy, cz)
+            camera.SetViewUp(0, 0, 1)
+        else:
+            # 正常视角，稍微倾斜
+            max_dim = max(dx, dy, dz)
+            dist = max_dim * 2.5
+            camera.SetPosition(cx + dist * 0.8, cy + dist * 0.6, cz + dist * 0.4)
+            camera.SetFocalPoint(cx, cy, cz)
+            camera.SetViewUp(0, 0, 1)
         
         self.renderer.ResetCamera()
-        camera.Zoom(1.1)
+        camera.Zoom(1.0)
