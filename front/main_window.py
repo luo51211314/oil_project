@@ -167,6 +167,7 @@ class MainWindow(QMainWindow):
         self.corner_selection_handle_actor = None
         self.selection_tool_controls = {}
         self.selection_params_by_algorithm = {}
+        self.selection_overlay_visible_by_algorithm = {}
         
         # 缓存VTK对象，避免重复生成
         self.cache = {
@@ -1812,6 +1813,8 @@ class MainWindow(QMainWindow):
             self.append_sim_status("=" * 50)
             self.mark_progress_complete()
 
+            self.set_selection_overlay_visible("black_oil", False)
+            self.clear_corner_selection_overlay(clear_params=False)
             self.render_mode3_smooth_pressure()
             self.update_statistics()
             self.append_visualization_summary()
@@ -2019,6 +2022,7 @@ class MainWindow(QMainWindow):
             return
 
         self.selection_params_by_algorithm[self.current_algorithm] = params
+        self.set_selection_overlay_visible(self.current_algorithm, True)
         self.sync_selection_tool_status()
         self.deactivate_corner_rectangle_selection_mode()
 
@@ -2265,6 +2269,8 @@ class MainWindow(QMainWindow):
         params = self.get_current_selection_params()
         if not params:
             return
+        if not self.is_selection_overlay_visible():
+            return
 
         self.update_corner_selection_preview(
             (params['x1'], params['y1']),
@@ -2286,9 +2292,19 @@ class MainWindow(QMainWindow):
         self.corner_selection_cube_source = None
         if clear_params:
             self.selection_params_by_algorithm.pop(self.current_algorithm, None)
+            self.set_selection_overlay_visible(self.current_algorithm, False)
             self.update_corner_selection_status("未选择区域")
         if hasattr(self, 'vtk_widget'):
             self.vtk_widget.iren.Render()
+
+    def set_selection_overlay_visible(self, algorithm_key, visible):
+        """设置指定算法的选区高亮是否允许重绘。"""
+        self.selection_overlay_visible_by_algorithm[algorithm_key] = bool(visible)
+
+    def is_selection_overlay_visible(self, algorithm_key=None):
+        """查询指定算法的选区高亮是否允许重绘。"""
+        key = algorithm_key or self.current_algorithm
+        return self.selection_overlay_visible_by_algorithm.get(key, False)
 
     def update_corner_selection_status(self, text):
         """更新 Corner Grid 框选工具的状态文字。"""
