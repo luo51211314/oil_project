@@ -45,6 +45,7 @@ class AlgorithmSelector(QWidget):
         self.algorithms = {
             "black_oil": {"name": "Black Oil", "color": "#4CAF50", "active_color": "#4CAF50"},
             "black_oil_corner_grid": {"name": "Corner Grid", "color": "#2196F3", "active_color": "#FF9800"},
+            "corner_edfm": {"name": "Corner EDFM", "color": "#26A69A", "active_color": "#26A69A"},
         }
         self.disabled_algos = ["Comp", "Thermal", "Foam", "Polymer"]
         
@@ -145,6 +146,8 @@ class MainWindow(QMainWindow):
         self.sim_process = None
         self.sim_output_buffer = ""
         self.pending_result_path = None
+        self.stop_requested = False
+        self.stop_force_timer = None
         self.step_log_interval = 30
         self.current_sim_total_days = 100.0
         self.current_progress_days = 0.0
@@ -455,6 +458,28 @@ class MainWindow(QMainWindow):
         """)
         self.run_btn.clicked.connect(self.run_simulation)
         toolbar.addWidget(self.run_btn)
+
+        self.stop_btn = QPushButton("Stop Simulation")
+        self.stop_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #d9534f;
+                color: white;
+                padding: 5px 15px;
+                border: none;
+                border-radius: 3px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #c9302c;
+            }
+            QPushButton:disabled {
+                background-color: #6b6b6b;
+                color: #b0b0b0;
+            }
+        """)
+        self.stop_btn.setEnabled(False)
+        self.stop_btn.clicked.connect(self.stop_simulation)
+        toolbar.addWidget(self.stop_btn)
     
     def create_left_panel(self):
         """创建左侧面板 - 与原文件一致"""
@@ -533,8 +558,24 @@ class MainWindow(QMainWindow):
         self.corner_results_page = self.create_corner_results_page()
         self.corner_param_stack.addWidget(self.corner_results_page)
 
+        self.corner_edfm_param_stack = QStackedWidget()
+        self.corner_edfm_param_stack.setStyleSheet("background-color: #2b2b2b;")
+
+        self.corner_edfm_grid_page = self.create_corner_edfm_grid_page()
+        self.corner_edfm_param_stack.addWidget(self.corner_edfm_grid_page)
+
+        self.corner_edfm_wells_page = self.create_corner_edfm_wells_page()
+        self.corner_edfm_param_stack.addWidget(self.corner_edfm_wells_page)
+
+        self.corner_edfm_fractures_page = self.create_corner_edfm_fractures_page()
+        self.corner_edfm_param_stack.addWidget(self.corner_edfm_fractures_page)
+
+        self.corner_edfm_results_page = self.create_corner_edfm_results_page()
+        self.corner_edfm_param_stack.addWidget(self.corner_edfm_results_page)
+
         self.algorithm_param_stack.addWidget(self.param_stack)
         self.algorithm_param_stack.addWidget(self.corner_param_stack)
+        self.algorithm_param_stack.addWidget(self.corner_edfm_param_stack)
         self.left_layout.addWidget(self.algorithm_param_stack)
         self.update_algorithm_parameter_pages()
     
@@ -1157,12 +1198,17 @@ class MainWindow(QMainWindow):
         vlayout = QVBoxLayout()
 
         combo_field = QComboBox()
-        combo_field.addItems(["Pressure", "Temperature", "Stress"])
+        if algorithm_key == "corner_edfm":
+            combo_field.addItems(["Pressure"])
+        else:
+            combo_field.addItems(["Pressure", "Temperature", "Stress"])
         combo_field.setStyleSheet("color: #cccccc; background-color: #3d3d3d;")
         combo_field.currentTextChanged.connect(self.change_field_display)
 
         check_show_grid = QCheckBox("Show Grid Lines")
         check_show_grid.setChecked(False)
+        if algorithm_key == "corner_edfm":
+            check_show_grid.setEnabled(False)
         check_show_grid.stateChanged.connect(self.toggle_grid_lines)
 
         check_show_fractures = QCheckBox("Show Fractures")
@@ -1377,6 +1423,162 @@ class MainWindow(QMainWindow):
         """创建 Corner Grid 的 Results 页面。"""
         return self.create_results_page("black_oil_corner_grid")
 
+    def create_corner_edfm_grid_page(self):
+        """创建 Corner EDFM 的 Grid 页面。"""
+        page = QWidget()
+        page.setStyleSheet("background-color: #2b2b2b;")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+
+        file_group = QGroupBox("Input Files")
+        file_group.setStyleSheet(self.groupbox_style())
+        file_layout = QVBoxLayout()
+
+        self.corner_edfm_coord_file_path = ""
+        self.corner_edfm_zcorn_file_path = ""
+
+        coord_layout = QHBoxLayout()
+        coord_label = QLabel("COORD:")
+        coord_label.setFixedWidth(60)
+        self.corner_edfm_coord_file_label = QLabel("未选择")
+        self.corner_edfm_coord_file_label.setStyleSheet("color: #8f8f8f;")
+        self.corner_edfm_coord_file_label.setWordWrap(True)
+        coord_btn = QPushButton("浏览...")
+        coord_btn.setFixedWidth(60)
+        coord_btn.clicked.connect(lambda: self.select_corner_edfm_csv_file("coord"))
+        coord_layout.addWidget(coord_label)
+        coord_layout.addWidget(self.corner_edfm_coord_file_label, 1)
+        coord_layout.addWidget(coord_btn)
+        file_layout.addLayout(coord_layout)
+
+        zcorn_layout = QHBoxLayout()
+        zcorn_label = QLabel("ZCORN:")
+        zcorn_label.setFixedWidth(60)
+        self.corner_edfm_zcorn_file_label = QLabel("未选择")
+        self.corner_edfm_zcorn_file_label.setStyleSheet("color: #8f8f8f;")
+        self.corner_edfm_zcorn_file_label.setWordWrap(True)
+        zcorn_btn = QPushButton("浏览...")
+        zcorn_btn.setFixedWidth(60)
+        zcorn_btn.clicked.connect(lambda: self.select_corner_edfm_csv_file("zcorn"))
+        zcorn_layout.addWidget(zcorn_label)
+        zcorn_layout.addWidget(self.corner_edfm_zcorn_file_label, 1)
+        zcorn_layout.addWidget(zcorn_btn)
+        file_layout.addLayout(zcorn_layout)
+
+        file_group.setLayout(file_layout)
+        layout.addWidget(file_group)
+
+        summary_group = QGroupBox("Grid Summary")
+        summary_group.setStyleSheet(self.groupbox_style())
+        summary_layout = QVBoxLayout()
+        summary_label = QLabel(
+            "Corner EDFM 使用 COORD / ZCORN CSV 作为输入网格。\n"
+            "请先选择文件，再到 Fractures 和 Wells 页面配置参数。"
+        )
+        summary_label.setWordWrap(True)
+        summary_label.setStyleSheet("color: #8f8f8f; padding: 6px 0;")
+        summary_layout.addWidget(summary_label)
+        summary_group.setLayout(summary_layout)
+        layout.addWidget(summary_group)
+
+        layout.addStretch()
+        return page
+
+    def create_corner_edfm_wells_page(self):
+        """创建 Corner EDFM 的 Wells 页面。"""
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        self.corner_edfm_spin_well_radius = self.create_double_spinbox(0.001, 100.0, 0.05, decimals=3)
+        self.corner_edfm_spin_well_pressure = self.create_double_spinbox(0.0, 100000.0, 700.0, decimals=2)
+        layout.addWidget(self.create_parameter_group("Well Parameters", [
+            ("Radius (m):", self.corner_edfm_spin_well_radius),
+            ("Pressure (bar):", self.corner_edfm_spin_well_pressure),
+        ]))
+
+        self.corner_edfm_spin_simulation_time = self.create_double_spinbox(0.0, 1000000.0, 100.0, decimals=2)
+        layout.addWidget(self.create_parameter_group("Simulation Control", [
+            ("Simulation Time (days):", self.corner_edfm_spin_simulation_time),
+        ]))
+
+        layout.addStretch()
+        return self.wrap_in_scroll_area(content)
+
+    def create_corner_edfm_hydraulic_fractures_group(self):
+        """Corner EDFM 的人工裂缝参数分组。"""
+        self.corner_edfm_check_enable_hf = QCheckBox("Enable Hydraulic Fractures")
+        self.corner_edfm_check_enable_hf.setChecked(True)
+        self.corner_edfm_spin_hf_count = self.create_spinbox(0, 200, 10)
+        self.corner_edfm_spin_hf_well_length = self.create_double_spinbox(0.0, 100000.0, 800.0, decimals=2)
+        self.corner_edfm_spin_hf_length = self.create_double_spinbox(0.0, 100000.0, 50.0, decimals=2)
+        self.corner_edfm_spin_hf_height = self.create_double_spinbox(0.0, 100000.0, 40.0, decimals=2)
+        self.corner_edfm_spin_hf_aperture = self.create_double_spinbox(0.0, 10.0, 0.01, decimals=4)
+        self.corner_edfm_spin_hf_perm = self.create_double_spinbox(0.0, 1000000.0, 1000.0, decimals=2)
+        self.corner_edfm_spin_hf_center_x = self.create_double_spinbox(-1.0, 100000.0, -1.0, decimals=2)
+        self.corner_edfm_spin_hf_center_y = self.create_double_spinbox(-1.0, 100000.0, -1.0, decimals=2)
+        self.corner_edfm_spin_hf_center_z = self.create_double_spinbox(-1.0, 100000.0, -1.0, decimals=2)
+
+        group = QGroupBox("Hydraulic Fractures")
+        group.setStyleSheet(self.groupbox_style())
+        layout = QGridLayout()
+        layout.addWidget(self.corner_edfm_check_enable_hf, 0, 0, 1, 2)
+        layout.addWidget(QLabel("Count:"), 1, 0)
+        layout.addWidget(self.corner_edfm_spin_hf_count, 1, 1)
+        layout.addWidget(QLabel("Well Length (m):"), 2, 0)
+        layout.addWidget(self.corner_edfm_spin_hf_well_length, 2, 1)
+        layout.addWidget(QLabel("HF Length (m):"), 3, 0)
+        layout.addWidget(self.corner_edfm_spin_hf_length, 3, 1)
+        layout.addWidget(QLabel("HF Height (m):"), 4, 0)
+        layout.addWidget(self.corner_edfm_spin_hf_height, 4, 1)
+        layout.addWidget(QLabel("Aperture (m):"), 5, 0)
+        layout.addWidget(self.corner_edfm_spin_hf_aperture, 5, 1)
+        layout.addWidget(QLabel("Permeability (Darcy):"), 6, 0)
+        layout.addWidget(self.corner_edfm_spin_hf_perm, 6, 1)
+        layout.addWidget(QLabel("Center X (m):"), 7, 0)
+        layout.addWidget(self.corner_edfm_spin_hf_center_x, 7, 1)
+        layout.addWidget(QLabel("Center Y (m):"), 8, 0)
+        layout.addWidget(self.corner_edfm_spin_hf_center_y, 8, 1)
+        layout.addWidget(QLabel("Center Z (m):"), 9, 0)
+        layout.addWidget(self.corner_edfm_spin_hf_center_z, 9, 1)
+        group.setLayout(layout)
+        return group
+
+    def create_corner_edfm_fractures_page(self):
+        """创建 Corner EDFM 的 Fractures 页面。"""
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        self.corner_edfm_spin_num_fracs = self.create_spinbox(0, 500, 60)
+        self.corner_edfm_spin_min_len = self.create_double_spinbox(0.0, 100000.0, 30.0, decimals=2)
+        self.corner_edfm_spin_max_len = self.create_double_spinbox(0.0, 100000.0, 80.0, decimals=2)
+        self.corner_edfm_spin_max_dip = self.create_double_spinbox(0.0, math.pi, math.pi / 3.0, decimals=4)
+        self.corner_edfm_spin_min_strike = self.create_double_spinbox(0.0, 2 * math.pi, 0.0, decimals=4)
+        self.corner_edfm_spin_max_strike = self.create_double_spinbox(0.0, 2 * math.pi, math.pi, decimals=4)
+        self.corner_edfm_spin_aperture = self.create_double_spinbox(0.0, 10.0, 0.01, decimals=4)
+        self.corner_edfm_spin_frac_perm = self.create_double_spinbox(0.0, 1000000.0, 1000.0, decimals=2)
+        layout.addWidget(self.create_parameter_group("Natural Fractures", [
+            ("Num Fractures:", self.corner_edfm_spin_num_fracs),
+            ("Min Length (m):", self.corner_edfm_spin_min_len),
+            ("Max Length (m):", self.corner_edfm_spin_max_len),
+            ("Max Dip (rad):", self.corner_edfm_spin_max_dip),
+            ("Min Strike (rad):", self.corner_edfm_spin_min_strike),
+            ("Max Strike (rad):", self.corner_edfm_spin_max_strike),
+            ("Aperture (m):", self.corner_edfm_spin_aperture),
+            ("Permeability (Darcy):", self.corner_edfm_spin_frac_perm),
+        ]))
+        layout.addWidget(self.create_corner_edfm_hydraulic_fractures_group())
+        layout.addStretch()
+        return self.wrap_in_scroll_area(content)
+
+    def create_corner_edfm_results_page(self):
+        """创建 Corner EDFM 的 Results 页面。"""
+        return self.create_results_page("corner_edfm")
+
     def create_placeholder_param_page(self, groups):
         """创建仅包含分组框和说明文字的占位参数页。"""
         content = QWidget()
@@ -1425,6 +1627,24 @@ class MainWindow(QMainWindow):
         else:
             self.corner_zcorn_file_path = file_path
             self.corner_zcorn_file_label.setText(os.path.basename(file_path))
+
+    def select_corner_edfm_csv_file(self, file_type):
+        """为 Corner EDFM 选择 CSV 输入文件。"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            f"选择 {file_type.upper()} CSV 文件",
+            "",
+            "CSV Files (*.csv);;All Files (*)",
+        )
+        if not file_path:
+            return
+
+        if file_type == "coord":
+            self.corner_edfm_coord_file_path = file_path
+            self.corner_edfm_coord_file_label.setText(os.path.basename(file_path))
+        else:
+            self.corner_edfm_zcorn_file_path = file_path
+            self.corner_edfm_zcorn_file_label.setText(os.path.basename(file_path))
 
     def draw_corner_grid_from_csv(self):
         """从CSV文件绘制角点网格"""
@@ -1503,6 +1723,8 @@ class MainWindow(QMainWindow):
 
         if self.current_algorithm == "black_oil_corner_grid":
             self.algorithm_param_stack.setCurrentWidget(self.corner_param_stack)
+        elif self.current_algorithm == "corner_edfm":
+            self.algorithm_param_stack.setCurrentWidget(self.corner_edfm_param_stack)
         else:
             self.algorithm_param_stack.setCurrentWidget(self.param_stack)
 
@@ -1510,6 +1732,8 @@ class MainWindow(QMainWindow):
         """获取当前算法对应的页签堆叠窗口。"""
         if self.current_algorithm == "black_oil_corner_grid" and hasattr(self, 'corner_param_stack'):
             return self.corner_param_stack
+        if self.current_algorithm == "corner_edfm" and hasattr(self, 'corner_edfm_param_stack'):
+            return self.corner_edfm_param_stack
         return self.param_stack
     
     def create_center_panel(self):
@@ -1681,6 +1905,10 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(0)
         self.progress_bar.setFormat("模拟进度 0%  |  运行失败")
 
+    def mark_progress_stopped(self):
+        """标记模拟已由用户停止。"""
+        self.update_progress_bar(self.current_progress_days, self.current_progress_step, "已停止")
+
     def process_simulation_log_line(self, line):
         """解析子进程日志，更新进度条并节流 Step 日志显示。"""
         sim_time_match = re.match(r"^Simulation time:\s*([0-9eE.+-]+)\s*days$", line)
@@ -1690,11 +1918,18 @@ class MainWindow(QMainWindow):
             self.append_sim_status(line)
             return
 
-        step_match = re.match(r"^Step\s+(\d+)\s+t=([0-9eE.+-]+)\s+dt=", line)
+        step_match = re.match(r"^Step\s+(\d+)(?:\s+@\s+T=|\s+t=)([0-9eE.+-]+)", line)
         if step_match:
             step = int(step_match.group(1))
             self.current_progress_step = max(self.current_progress_step, step)
-            should_display = ("ok" in line) and (step % self.step_log_interval == 0)
+            self.current_progress_days = max(self.current_progress_days, float(step_match.group(2)))
+            self.update_progress_bar(self.current_progress_days, self.current_progress_step, "运行中")
+            line_lower = line.lower()
+            should_display = (
+                (step == 1)
+                or (step % self.step_log_interval == 0)
+                or ("failed" in line_lower)
+            )
             self.pending_step_summary = should_display
             if should_display:
                 self.append_sim_status(line)
@@ -1719,7 +1954,11 @@ class MainWindow(QMainWindow):
     
     def collect_simulation_params(self):
         """收集当前UI中的模拟参数。"""
+        if self.current_algorithm == "corner_edfm":
+            return self.collect_corner_edfm_params()
+
         params = {
+            'algorithm': self.current_algorithm,
             'grid_refinement': self.combo_grid_refinement.currentText(),
             'grid_type': (
                 self.combo_grid_type.currentData()
@@ -1740,6 +1979,38 @@ class MainWindow(QMainWindow):
             params.update(self.collect_black_oil_region_fracture_params(params))
 
         return params
+
+    def collect_corner_edfm_params(self):
+        """收集 Corner EDFM 页面参数。"""
+        hf_count = self.corner_edfm_spin_hf_count.value()
+        hf_well_length = self.corner_edfm_spin_hf_well_length.value()
+        return {
+            'algorithm': 'corner_edfm',
+            'coord_file': self.corner_edfm_coord_file_path,
+            'zcorn_file': self.corner_edfm_zcorn_file_path,
+            'num_fracs': self.corner_edfm_spin_num_fracs.value(),
+            'min_len': self.corner_edfm_spin_min_len.value(),
+            'max_len': self.corner_edfm_spin_max_len.value(),
+            'max_dip': self.corner_edfm_spin_max_dip.value(),
+            'min_strike': self.corner_edfm_spin_min_strike.value(),
+            'max_strike': self.corner_edfm_spin_max_strike.value(),
+            'aperture': self.corner_edfm_spin_aperture.value(),
+            'frac_perm': self.corner_edfm_spin_frac_perm.value(),
+            'hf_enabled': self.corner_edfm_check_enable_hf.isChecked(),
+            'hf_count': hf_count,
+            'hf_well_length': hf_well_length,
+            'hf_center_x': self.corner_edfm_spin_hf_center_x.value(),
+            'hf_center_y': self.corner_edfm_spin_hf_center_y.value(),
+            'hf_center_z': self.corner_edfm_spin_hf_center_z.value(),
+            'hf_spacing_x': (hf_well_length / (hf_count - 1)) if hf_count > 1 else 0.0,
+            'hf_length': self.corner_edfm_spin_hf_length.value(),
+            'hf_height': self.corner_edfm_spin_hf_height.value(),
+            'hf_aperture': self.corner_edfm_spin_hf_aperture.value(),
+            'hf_perm': self.corner_edfm_spin_hf_perm.value(),
+            'well_radius': self.corner_edfm_spin_well_radius.value(),
+            'well_pressure': self.corner_edfm_spin_well_pressure.value(),
+            'simulation_time': self.corner_edfm_spin_simulation_time.value(),
+        }
 
     def collect_black_oil_region_fracture_params(self, params):
         """将 Black Oil 的框选区域参数整理成算法输入。"""
@@ -1776,36 +2047,65 @@ class MainWindow(QMainWindow):
             return
 
         params = self.collect_simulation_params()
+        if self.current_algorithm == "corner_edfm":
+            if not params.get('coord_file') or not params.get('zcorn_file'):
+                self.status_bar.showMessage("Please select COORD and ZCORN files")
+                self.append_sim_status("Corner EDFM requires both COORD and ZCORN files.")
+                return
         self.clear_cache()
         self.reset_progress_state()
+        self.current_sim_total_days = float(params.get('simulation_time', 100.0))
 
-        self.status_bar.showMessage("Running simulation...")
+        self.status_bar.showMessage(
+            "Running Corner EDFM simulation..." if self.current_algorithm == "corner_edfm"
+            else "Running simulation..."
+        )
         self.clear_sim_status()
         self.append_sim_status("=" * 50)
-        self.append_sim_status("  EDFM Black Oil Simulation Starting...")
-        self.append_sim_status("=" * 50)
-        self.append_sim_status(
-            f"Grid: {params['nx']}x{params['ny']}x{params['nz']}, "
-            f"Domain: {params['lx']}x{params['ly']}x{params['lz']} m"
-        )
-        self.append_sim_status(
-            f"Fractures: {params['num_fracs']}, Length: {params['min_len']}-{params['max_len']} m, "
-            f"Aperture: {params['aperture']} m"
-        )
-        self.append_sim_status(
-            f"Well: ({params['well_x']}, {params['well_y']}, {params['well_z']}), "
-            f"Pressure: {params['well_pressure']} bar"
-        )
-        if params.get('region_num_fracs', 0) > 0:
-            self.append_sim_status(
-                "Region Fractures: "
-                f"N={params['region_num_fracs']}, "
-                f"X[{params['region_x_min']:.2f}, {params['region_x_max']:.2f}], "
-                f"Y[{params['region_y_min']:.2f}, {params['region_y_max']:.2f}], "
-                f"Z[{params['region_z_min']:.2f}, {params['region_z_max']:.2f}]"
-            )
+        if self.current_algorithm == "corner_edfm":
+            self.append_sim_status("  Corner EDFM Simulation Starting...")
         else:
-            self.append_sim_status("Region Fractures: disabled")
+            self.append_sim_status("  EDFM Black Oil Simulation Starting...")
+        self.append_sim_status("=" * 50)
+        if self.current_algorithm == "corner_edfm":
+            self.append_sim_status(f"COORD file: {os.path.basename(params['coord_file'])}")
+            self.append_sim_status(f"ZCORN file: {os.path.basename(params['zcorn_file'])}")
+            self.append_sim_status(
+                f"Natural Fractures: {params['num_fracs']}, "
+                f"Length: {params['min_len']}-{params['max_len']} m, "
+                f"Aperture: {params['aperture']} m"
+            )
+            self.append_sim_status(
+                f"Hydraulic Fractures: {params['hf_count'] if params['hf_enabled'] else 0}, "
+                f"Length: {params['hf_length']} m, Height: {params['hf_height']} m"
+            )
+            self.append_sim_status(
+                f"Well: Radius {params['well_radius']} m, Pressure {params['well_pressure']} bar"
+            )
+            self.append_sim_status(f"Simulation Time: {params['simulation_time']} days")
+        else:
+            self.append_sim_status(
+                f"Grid: {params['nx']}x{params['ny']}x{params['nz']}, "
+                f"Domain: {params['lx']}x{params['ly']}x{params['lz']} m"
+            )
+            self.append_sim_status(
+                f"Fractures: {params['num_fracs']}, Length: {params['min_len']}-{params['max_len']} m, "
+                f"Aperture: {params['aperture']} m"
+            )
+            self.append_sim_status(
+                f"Well: ({params['well_x']}, {params['well_y']}, {params['well_z']}), "
+                f"Pressure: {params['well_pressure']} bar"
+            )
+            if params.get('region_num_fracs', 0) > 0:
+                self.append_sim_status(
+                    "Region Fractures: "
+                    f"N={params['region_num_fracs']}, "
+                    f"X[{params['region_x_min']:.2f}, {params['region_x_max']:.2f}], "
+                    f"Y[{params['region_y_min']:.2f}, {params['region_y_max']:.2f}], "
+                    f"Z[{params['region_z_min']:.2f}, {params['region_z_max']:.2f}]"
+                )
+            else:
+                self.append_sim_status("Region Fractures: disabled")
         self.append_sim_status("")
 
         tmp_dir = os.path.join(self.project_root, '.tmp')
@@ -1813,6 +2113,7 @@ class MainWindow(QMainWindow):
         fd, self.pending_result_path = tempfile.mkstemp(prefix='simulation_result_', suffix='.json', dir=tmp_dir)
         os.close(fd)
         self.sim_output_buffer = ""
+        self.stop_requested = False
 
         self.sim_process = QProcess(self)
         self.sim_process.setWorkingDirectory(self.project_root)
@@ -1832,7 +2133,42 @@ class MainWindow(QMainWindow):
         self.sim_process.errorOccurred.connect(self.handle_simulation_error)
 
         self.run_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
         self.sim_process.start()
+
+    def stop_simulation(self):
+        """停止当前运行中的模拟子进程。"""
+        if not self.sim_process or self.sim_process.state() == QProcess.NotRunning:
+            self.status_bar.showMessage("No simulation is running")
+            self.stop_btn.setEnabled(False)
+            return
+
+        if self.stop_requested:
+            return
+
+        self.stop_requested = True
+        self.stop_btn.setEnabled(False)
+        self.append_sim_status("")
+        self.append_sim_status("Stopping simulation on user request...")
+        self.status_bar.showMessage("Stopping simulation...")
+
+        if os.name == 'nt':
+            self.sim_process.kill()
+            return
+
+        self.sim_process.terminate()
+
+        if self.stop_force_timer is None:
+            self.stop_force_timer = QTimer(self)
+            self.stop_force_timer.setSingleShot(True)
+            self.stop_force_timer.timeout.connect(self.force_stop_simulation)
+        self.stop_force_timer.start(500)
+
+    def force_stop_simulation(self):
+        """在子进程未及时退出时强制终止。"""
+        if self.sim_process and self.sim_process.state() != QProcess.NotRunning:
+            self.append_sim_status("Simulation did not stop in time; force killing process...")
+            self.sim_process.kill()
     
     def run_corner_point_grid_simulation(self):
         """运行角点网格模拟"""
@@ -2047,8 +2383,15 @@ class MainWindow(QMainWindow):
         self.handle_process_output()
         self.flush_process_output_buffer()
         self.run_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
 
         try:
+            if self.stop_requested:
+                self.append_sim_status("Simulation stopped.")
+                self.mark_progress_stopped()
+                self.status_bar.showMessage("Simulation stopped")
+                return
+
             if exit_status != QProcess.NormalExit or exit_code != 0:
                 self.append_sim_status("")
                 self.append_sim_status(f"ERROR: simulation process exited with code {exit_code}")
@@ -2081,18 +2424,28 @@ class MainWindow(QMainWindow):
 
     def handle_simulation_error(self, process_error):
         """子进程启动/执行异常时记录错误。"""
+        if self.stop_requested:
+            self.run_btn.setEnabled(True)
+            self.stop_btn.setEnabled(False)
+            self.status_bar.showMessage("Simulation stopped")
+            return
+
         if process_error == QProcess.FailedToStart:
             self.append_sim_status("ERROR: failed to start simulation process")
             self.run_btn.setEnabled(True)
+            self.stop_btn.setEnabled(False)
             self.mark_progress_failed()
             self.cleanup_simulation_process()
         elif process_error == QProcess.Crashed:
             self.append_sim_status("ERROR: simulation process crashed")
             self.mark_progress_failed()
+            self.stop_btn.setEnabled(False)
         self.status_bar.showMessage("Simulation failed")
 
     def cleanup_simulation_process(self):
         """清理子进程和临时结果文件。"""
+        if self.stop_force_timer is not None:
+            self.stop_force_timer.stop()
         if self.pending_result_path and os.path.exists(self.pending_result_path):
             try:
                 os.remove(self.pending_result_path)
@@ -2100,6 +2453,7 @@ class MainWindow(QMainWindow):
                 pass
         self.pending_result_path = None
         self.sim_output_buffer = ""
+        self.stop_requested = False
         if self.sim_process is not None:
             self.sim_process.deleteLater()
             self.sim_process = None
@@ -2717,13 +3071,20 @@ class MainWindow(QMainWindow):
             self.stats_text.append(f"P90: {p90:.2f} MPa")
             
             # 更新属性表格 - 与原文件一致
+            total_cells = len(self.sim_data.pressure_field)
+            if self.current_algorithm == "corner_edfm":
+                algorithm_name = "Corner EDFM"
+                grid_type = "Corner Point"
+            else:
+                algorithm_name = "Black Oil"
+                grid_type = "Structured"
             self.prop_table.setRowCount(5)
             props = [
-                ("Algorithm", "Black Oil"),
-                ("Grid Type", "Structured"),
-                ("Total Cells", str(nx * ny * nz)),
-                ("Active Cells", str(nx * ny * nz)),
-                ("Timesteps", "100 days")
+                ("Algorithm", algorithm_name),
+                ("Grid Type", grid_type),
+                ("Total Cells", str(total_cells)),
+                ("Active Cells", str(total_cells)),
+                ("Timesteps", f"{self.current_sim_total_days:.2f} days")
             ]
             for i, (prop, val) in enumerate(props):
                 self.prop_table.setItem(i, 0, QTableWidgetItem(prop))

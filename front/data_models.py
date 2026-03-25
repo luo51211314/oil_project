@@ -138,19 +138,20 @@ class SimulationData:
     def generate_from_cpp(self, sim_result, nx, ny, nz, lx, ly, lz, grid_lines=None, interpolated_pressure=None):
         """从C++结果生成数据"""
         self.grid_info = {'nx': nx, 'ny': ny, 'nz': nz, 'Lx': lx, 'Ly': ly, 'Lz': lz}
-        self.pressure_field = list(sim_result.pressure_field)
-        self.temperature_field = _safe_to_list(sim_result.temperature_field)
-        self.stress_field = _safe_to_list(sim_result.stress_field)
+        self.pressure_field = _safe_to_list(getattr(sim_result, 'pressure_field', []))
+        self.temperature_field = _safe_to_list(getattr(sim_result, 'temperature_field', None))
+        self.stress_field = _safe_to_list(getattr(sim_result, 'stress_field', None))
         self.grid_lines = _safe_to_list(grid_lines)
         self.interpolated_pressure = _safe_to_list(interpolated_pressure)
         
         self.fractures = []
-        vertices = list(sim_result.fracture_vertices)
+        vertices = _safe_to_list(getattr(sim_result, 'fracture_vertices', []))
         
         for i in range(0, len(vertices), 4):
             if i + 3 < len(vertices):
+                frac_id = int(vertices[i][3]) if len(vertices[i]) > 3 else (i // 4)
                 frac = {
-                    'id': i // 4,
+                    'id': frac_id,
                     'points': [
                         (vertices[i][0], vertices[i][1], vertices[i][2]),
                         (vertices[i+1][0], vertices[i+1][1], vertices[i+1][2]),

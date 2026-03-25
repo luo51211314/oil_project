@@ -33,7 +33,7 @@ pybind11_add_module(edfm_core
 
 # 创建新模块 - Corner Point Grid EDFM
 pybind11_add_module(edfm_core_corner
-    src/basic/Corner_Point_Grid_edfm_3d_water_oil.cpp
+    src/basic/UPGRATED_rearrangement_Corner_Point_Grid_edfm_3d_water_oil_ILUT+BiCGSTAB.cpp
 )
 
 
