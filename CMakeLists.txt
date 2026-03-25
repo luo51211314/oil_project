@@ -8,9 +8,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # lxw
 # set(EIGEN3_INCLUDE_DIR "D:/eigen-3.3.8")
 # ypw 
-# set(EIGEN3_INCLUDE_DIR "D:/mingw64/eigen")
+set(EIGEN3_INCLUDE_DIR "D:/mingw64/eigen")
 # wzq
-set(EIGEN3_INCLUDE_DIR "D:/vtk/vcpkg/installed/x64-windows/include/eigen3")
+# set(EIGEN3_INCLUDE_DIR "D:/vtk/vcpkg/installed/x64-windows/include/eigen3")
 
 include_directories(${EIGEN3_INCLUDE_DIR})
 
@@ -18,9 +18,9 @@ include_directories(${EIGEN3_INCLUDE_DIR})
 # lxw
 # set(pybind11_DIR "D:/Anaconda/envs/oil/Lib/site-packages/pybind11/share/cmake/pybind11")
 # ypw
-# set(pybind11_DIR "D:/anaconda3/envs/transformers/Lib/site-packages/pybind11/share/cmake/pybind11")
+set(pybind11_DIR "D:/anaconda3/envs/transformers/Lib/site-packages/pybind11/share/cmake/pybind11")
 # wzq
-set(pybind11_DIR "D:/pybind11_site/pybind11/share/cmake/pybind11")
+# set(pybind11_DIR "D:/pybind11_site/pybind11/share/cmake/pybind11")
 find_package(pybind11 REQUIRED)
 
 # 创建模块 - 包含完整的EDFM算法
