@@ -7,14 +7,16 @@ import os
 import json
 import math
 import re
+import shutil
 import tempfile
+from datetime import datetime
 
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QLabel, QPushButton, QSplitter, QFrame, QToolBar, QAction,
                              QStatusBar, QTabWidget, QStackedWidget, QTextEdit, QGroupBox,
                              QTableWidget, QSpinBox, QDoubleSpinBox, QGridLayout, QComboBox,
                              QProgressBar, QScrollArea, QFileDialog, QDialog, QDialogButtonBox,
-                             QCheckBox, QTableWidgetItem, QLineEdit)
+                             QCheckBox, QTableWidgetItem, QLineEdit, QMessageBox)
 from PyQt5.QtCore import Qt, QSize, QProcess, QTimer
 from PyQt5.QtGui import QIcon, QFont, QColor, QPixmap, QPainter
 from vtk.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
@@ -157,6 +159,7 @@ class MainWindow(QMainWindow):
         self.default_grid_type = "corner_point"
         self.show_grid_type_selector = False
         self.current_algorithm = "black_oil"
+        self.last_csv_export_dir = self.project_root
         self.corner_selection_mode_active = False
         self.corner_selection_dragging = False
         self.corner_selection_start_xy = None
@@ -2419,6 +2422,7 @@ class MainWindow(QMainWindow):
             self.update_statistics()
             self.append_visualization_summary()
             self.status_bar.showMessage("Simulation completed")
+            self.prompt_and_copy_generated_csv_files()
         finally:
             self.cleanup_simulation_process()
 
@@ -2457,6 +2461,113 @@ class MainWindow(QMainWindow):
         if self.sim_process is not None:
             self.sim_process.deleteLater()
             self.sim_process = None
+
+    def get_generated_csv_filenames(self, algorithm_key=None):
+        """返回指定算法在项目根目录下生成的 CSV 文件名列表。"""
+        algorithm = algorithm_key or self.current_algorithm
+        if algorithm == "black_oil":
+            return [
+                "grid_info_lgr.csv",
+                "fracture_geometry_lgr.csv",
+                "well_info_lgr.csv",
+                "output_sim_lgr.csv",
+                "final_field_lgr.csv",
+                "segments_lgr.csv",
+            ]
+        if algorithm == "corner_edfm":
+            return [
+                "grid_info.csv",
+                "cell_geometry.csv",
+                "face_geometry.csv",
+                "fracture_geometry.csv",
+                "well_info.csv",
+                "output_sim.csv",
+                "final_field.csv",
+            ]
+        return []
+
+    def collect_existing_generated_csv_paths(self, algorithm_key=None):
+        """收集当前算法生成的 CSV 文件路径。"""
+        existing_paths = []
+        missing_names = []
+        for filename in self.get_generated_csv_filenames(algorithm_key):
+            file_path = os.path.join(self.project_root, filename)
+            if os.path.exists(file_path):
+                existing_paths.append(file_path)
+            else:
+                missing_names.append(filename)
+        return existing_paths, missing_names
+
+    def build_csv_export_directory(self, parent_dir, algorithm_key=None):
+        """构造带时间戳且不冲突的导出目录。"""
+        algorithm = algorithm_key or self.current_algorithm
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        base_name = f"{timestamp}_{algorithm}"
+        candidate = os.path.join(parent_dir, base_name)
+        suffix = 1
+        while os.path.exists(candidate):
+            candidate = os.path.join(parent_dir, f"{base_name}_{suffix}")
+            suffix += 1
+        return candidate
+
+    def prompt_and_copy_generated_csv_files(self):
+        """在模拟成功后提示用户将本次 CSV 结果另存到其他目录。"""
+        csv_paths, missing_names = self.collect_existing_generated_csv_paths()
+        if not csv_paths:
+            self.append_sim_status("No generated CSV files were found for export copy.")
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "另存 CSV 结果",
+            f"模拟已完成，是否将本次生成的 {len(csv_paths)} 个 CSV 文件另存到其他位置？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if reply != QMessageBox.Yes:
+            self.append_sim_status("CSV copy skipped.")
+            return
+
+        target_root = QFileDialog.getExistingDirectory(
+            self,
+            "选择 CSV 结果保存目录",
+            self.last_csv_export_dir,
+            QFileDialog.ShowDirsOnly,
+        )
+        if not target_root:
+            self.append_sim_status("CSV copy cancelled.")
+            self.status_bar.showMessage("CSV copy cancelled")
+            return
+
+        self.last_csv_export_dir = target_root
+        export_dir = self.build_csv_export_directory(target_root)
+
+        try:
+            os.makedirs(export_dir, exist_ok=False)
+            copied_names = []
+            for csv_path in csv_paths:
+                filename = os.path.basename(csv_path)
+                shutil.copy2(csv_path, os.path.join(export_dir, filename))
+                copied_names.append(filename)
+        except OSError as exc:
+            self.append_sim_status(f"ERROR: failed to copy CSV files: {exc}")
+            self.status_bar.showMessage("CSV copy failed")
+            QMessageBox.warning(
+                self,
+                "CSV 另存失败",
+                f"复制 CSV 文件时出错：\n{exc}",
+            )
+            return
+
+        self.append_sim_status(f"CSV files copied to: {export_dir}")
+        if missing_names:
+            self.append_sim_status("Missing CSV files were skipped: " + ", ".join(missing_names))
+        self.status_bar.showMessage("CSV files copied successfully")
+        QMessageBox.information(
+            self,
+            "CSV 另存完成",
+            f"已复制 {len(copied_names)} 个 CSV 文件到:\n{export_dir}",
+        )
 
     def append_visualization_summary(self):
         """将当前可视化数据边界追加到状态面板。"""
