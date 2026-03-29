@@ -1,6 +1,7 @@
 // =============================================================================
 // 文件名: edfm_3d_blackoil.cpp
 // 描述: 3D 三相(油气水) 黑油模型 EDFM 求解器
+//      网格初始化已改为支持从 COORD.csv + ZCORN.csv 读取 corner-point grid
 // 依赖: Eigen 3.3+
 // 编译: g++ -O3 -std=c++17 edfm_3d_blackoil.cpp -o edfm_3d -I /path/to/eigen
 // =============================================================================
@@ -14,6 +15,10 @@
 #include <random>
 #include <tuple>
 #include <map>
+#include <sstream>
+#include <string>
+#include <stdexcept>
+#include <cctype>
 
 #include <Eigen/Sparse>
 #include <Eigen/Dense>
@@ -57,6 +62,123 @@ struct Point3 {
     double norm() const { return std::sqrt(x*x + y*y + z*z); }
 };
 
+// =============================================================================
+// 1.1 corner-point grid 输入相关数据结构
+// =============================================================================
+
+// 一根 pillar 的上下两个端点
+struct Pillar {
+    Point3 top{0, 0, 0};
+    Point3 bot{0, 0, 0};
+    bool has_top = false;
+    bool has_bot = false;
+};
+
+// COORD.csv 的一行
+struct CoordRow {
+    int i = 0;   // 0-based pillar i
+    int j = 0;   // 0-based pillar j
+    bool is_top = false;
+    Point3 p{0, 0, 0};
+};
+
+// ZCORN.csv 的一行
+struct ZCornRow {
+    int i = 0;   // 0-based cell i
+    int j = 0;   // 0-based cell j
+    int k = 0;   // 0-based cell k
+    std::array<double, 8> z{{0, 0, 0, 0, 0, 0, 0, 0}}; // Z1~Z8
+};
+
+// =============================================================================
+// 1.2 CSV / 字符串辅助函数
+// =============================================================================
+
+std::string stripUTF8BOM(const std::string& s) {
+    if (s.size() >= 3 &&
+        (unsigned char)s[0] == 0xEF &&
+        (unsigned char)s[1] == 0xBB &&
+        (unsigned char)s[2] == 0xBF) {
+        return s.substr(3);
+    }
+    return s;
+}
+
+std::string trim(const std::string& s) {
+    std::string t = stripUTF8BOM(s);
+    size_t b = 0;
+    size_t e = t.size();
+
+    while (b < e && std::isspace((unsigned char)t[b])) ++b;
+    while (e > b && std::isspace((unsigned char)t[e - 1])) --e;
+
+    return t.substr(b, e - b);
+}
+
+// 简单 CSV 分割：按逗号切分，适用于本项目规则 CSV
+std::vector<std::string> splitCSVSimple(const std::string& line) {
+    std::vector<std::string> cols;
+    std::stringstream ss(line);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+        cols.push_back(trim(item));
+    }
+
+    // 若最后一个字符是逗号，补一个空字段
+    if (!line.empty() && line.back() == ',') {
+        cols.push_back("");
+    }
+    return cols;
+}
+
+bool parseIntStrict(const std::string& s, int& v) {
+    try {
+        std::string t = trim(s);
+        size_t pos = 0;
+        v = std::stoi(t, &pos);
+        return pos == t.size();
+    } catch (...) {
+        return false;
+    }
+}
+
+bool parseDoubleStrict(const std::string& s, double& v) {
+    try {
+        std::string t = trim(s);
+        size_t pos = 0;
+        v = std::stod(t, &pos);
+        return pos == t.size();
+    } catch (...) {
+        return false;
+    }
+}
+
+bool isTopMarker(const std::string& s) {
+    std::string t = trim(s);
+    if (t == "顶") return true;
+
+    std::string low = t;
+    for (char& ch : low) ch = (char)std::tolower((unsigned char)ch);
+    return low == "top";
+}
+
+bool isBottomMarker(const std::string& s) {
+    std::string t = trim(s);
+    if (t == "底") return true;
+
+    std::string low = t;
+    for (char& ch : low) ch = (char)std::tolower((unsigned char)ch);
+    return low == "bottom";
+}
+
+int flatPillarIndex(int i, int j, int npx) {
+    return j * npx + i;
+}
+
+int flatCellIndex(int i, int j, int k, int Nx, int Ny) {
+    return k * Nx * Ny + j * Nx + i;
+}
+
 // 裂缝定义（几何输入）
 struct Fracture {
     int id = -1;
@@ -68,8 +190,7 @@ struct Fracture {
     bool is_hydraulic = false;
 };
 
-
-// 全局 face 几何对象（阶段A新增）
+// 全局 face 几何对象
 struct FaceGeom {
     int id = -1;
 
@@ -78,7 +199,7 @@ struct FaceGeom {
     int owner = -1;
     int neighbor = -1;
 
-    // 该 face 在 owner / neighbor 中对应的局部 face 槽位
+    // 该 face 在 owner / neighbor 中对应的局部 face 槽位，例如XP、XM等
     int local_owner_face = -1;
     int local_neighbor_face = -1;
 
@@ -93,14 +214,12 @@ struct FaceGeom {
     Point3 bbox_max{0, 0, 0};
 };
 
-// 网格单元（阶段A升级版）
-// 仍保留 dx,dy,dz / center / vol 等字段，以保证后续旧函数暂时还能编译运行。
-// 但从这一阶段开始，真实几何信息应优先来自 corners / face_ids / bbox。
+// 网格单元
 struct Cell {
-    int id = -1;             // 全局索引
-    int ix = 0, iy = 0, iz = 0;     // 逻辑 IJK 索引
+    int id = -1;                     // 全局索引
+    int ix = 0, iy = 0, iz = 0;      // 逻辑 IJK 索引
 
-    Point3 center{0, 0, 0};  // 几何中心（阶段A先用8角点平均）
+    Point3 center{0, 0, 0};          // 几何中心（阶段A先用8角点平均）
     double dx = 0.0, dy = 0.0, dz = 0.0; // 兼容字段；后续不再作为真几何依据
     double vol = 0.0;
 
@@ -133,20 +252,21 @@ struct Segment {
     double aperture;
     double perm;
     double T_mf;        // 基质-裂缝传导率
-     // 六个宿主 cell 面上的几何信息
+
+    // 六个宿主 cell 面上的几何信息
     // 0:x-, 1:x+, 2:y-, 3:y+, 4:z-, 5:z+
-    double face_trace_len[6] = {0, 0, 0, 0, 0, 0};  //这个 segment 在宿主 cell 的第 f 个面上的交线长度
-    double face_center_dist[6] = {0, 0, 0, 0, 0, 0}; //segment 面积质心到该 face-trace 的距离
-    std::vector<Point3> poly;   // 新增
+    double face_trace_len[6] = {0, 0, 0, 0, 0, 0};   // segment 在宿主 cell 的第 f 个面上的交线长度
+    double face_center_dist[6] = {0, 0, 0, 0, 0, 0}; // segment 面积质心到该 face-trace 的距离
+    std::vector<Point3> poly;
 };
 
 // 连接关系 (用于构建 Jacobian)
 struct Connection {
-    int u; // 单元 u (可以是基质或裂缝段)
-    int v; // 单元 v
-    double T; // 传导率
+    int u;      // 单元 u (可以是基质或裂缝段)
+    int v;      // 单元 v
+    double T;   // 传导率
     // 类型: 0=Matrix-Matrix, 1=Matrix-Fracture, 2=Fracture-Fracture
-    int type; 
+    int type;
 };
 
 // 流体物性参数
@@ -155,15 +275,15 @@ struct FluidProps {
     double mu_w = 1.0;
     double mu_o = 5.0;
     double mu_g = 0.2;
-    
+
     // 压缩系数 (1/bar)
     double cw = 1e-8;
     double co = 1e-5;
     double cg = 1e-3;
-    
+
     // 参考压力 (bar)
     double P_ref = 100.0;
-    
+
     // 相对渗透率端点
     double Swi = 0.05;
     double Sor = 0.01;
@@ -176,9 +296,9 @@ typedef Eigen::AutoDiffScalar<Deriv3> AD3;
 // 状态变量 (每个计算节点：基质或裂缝段)
 template <typename T>
 struct StateT {
-    T P;  // 油相压力
-    T Sw; // 水饱和度
-    T Sg; // 气饱和度
+    T P;   // 油相压力
+    T Sw;  // 水饱和度
+    T Sg;  // 气饱和度
     // So = 1 - Sw - Sg;
 };
 typedef StateT<double> State;
@@ -191,8 +311,9 @@ struct PropertiesT {
     T lw, lo, lg;
 };
 
-// 阶段A新增：几何辅助函数
-// ==========================
+// =============================================================================
+// 2. 几何辅助函数：基础几何原语
+// =============================================================================
 
 Point3 pointMin(const Point3& a, const Point3& b) {
     return {std::min(a.x, b.x), std::min(a.y, b.y), std::min(a.z, b.z)};
@@ -202,16 +323,24 @@ Point3 pointMax(const Point3& a, const Point3& b) {
     return {std::max(a.x, b.x), std::max(a.y, b.y), std::max(a.z, b.z)};
 }
 
-Point3 averagePoints(const std::array<Point3, 4>& pts) {
+Point3 averagePoints(const std::array<Point3, 4>& pts) {  // 面顶点质心
     Point3 c{0, 0, 0};
     for (const auto& p : pts) c = c + p;
     return c / 4.0;
 }
 
-Point3 averagePoints(const std::array<Point3, 8>& pts) {
+Point3 averagePoints(const std::array<Point3, 8>& pts) {  // 网格顶点质心
     Point3 c{0, 0, 0};
     for (const auto& p : pts) c = c + p;
     return c / 8.0;
+}
+
+double triangleArea3D(const Point3& a, const Point3& b, const Point3& c) { // 三角形面积
+    return 0.5 * ((b - a).cross(c - a)).norm();
+}
+
+double quadArea3D(const std::array<Point3, 4>& q) {  // 四边形面积
+    return triangleArea3D(q[0], q[1], q[2]) + triangleArea3D(q[0], q[2], q[3]);
 }
 
 // quad 面法向（单位向量），用 Newell 方法更稳一些
@@ -229,14 +358,6 @@ Point3 quadUnitNormal(const std::array<Point3, 4>& q) {
     return n / nn;
 }
 
-double triangleArea3D(const Point3& a, const Point3& b, const Point3& c) {
-    return 0.5 * ((b - a).cross(c - a)).norm();
-}
-
-double quadArea3D(const std::array<Point3, 4>& q) {
-    return triangleArea3D(q[0], q[1], q[2]) + triangleArea3D(q[0], q[2], q[3]);
-}
-
 // 调整四边形顶点顺序，使其法向朝 cell_center 外侧
 void orientQuadOutward(std::array<Point3, 4>& q, const Point3& cell_center) {
     Point3 fc = averagePoints(q);
@@ -249,19 +370,9 @@ void orientQuadOutward(std::array<Point3, 4>& q, const Point3& cell_center) {
     }
 }
 
-double signedTetVolumeFromOrigin(const Point3& a, const Point3& b, const Point3& c) {
-    return a.dot(b.cross(c)) / 6.0;
-}
-
-// 通过“外向有序的六个 face 三角化”估算一般六面体体积
-double hexaVolumeFromOrientedFaces(const std::array<std::array<Point3, 4>, 6>& face_quads) {
-    double v = 0.0;
-    for (const auto& q : face_quads) {
-        v += signedTetVolumeFromOrigin(q[0], q[1], q[2]);
-        v += signedTetVolumeFromOrigin(q[0], q[2], q[3]);
-    }
-    return std::abs(v);
-}
+// =============================================================================
+// 3. 几何辅助函数：cell / face 几何构造
+// =============================================================================
 
 // 局部 face 槽位 -> 8角点编号映射
 std::array<int, 4> getLocalFaceCornerIds(int face_id) {
@@ -281,6 +392,20 @@ std::array<Point3, 4> getCellFaceVertices(const Cell& c, int face_id) {
     return {c.corners[ids[0]], c.corners[ids[1]], c.corners[ids[2]], c.corners[ids[3]]};
 }
 
+double signedTetVolumeFromOrigin(const Point3& a, const Point3& b, const Point3& c) {
+    return a.dot(b.cross(c)) / 6.0; // 有符号四面体体积
+}
+
+// 通过“外向有序的六个 face 三角化”估算一般六面体体积
+double hexaVolumeFromOrientedFaces(const std::array<std::array<Point3, 4>, 6>& face_quads) {
+    double v = 0.0;
+    for (const auto& q : face_quads) {
+        v += signedTetVolumeFromOrigin(q[0], q[1], q[2]);
+        v += signedTetVolumeFromOrigin(q[0], q[2], q[3]);
+    }
+    return std::abs(v);
+}
+
 // 用 corners 预计算 cell 的 center / bbox / vol / depth
 void computeCellDerivedGeometry(Cell& c) {
     c.center = averagePoints(c.corners);
@@ -292,7 +417,7 @@ void computeCellDerivedGeometry(Cell& c) {
         c.bbox_max = pointMax(c.bbox_max, c.corners[n]);
     }
 
-    // 为兼容你后续尚未改造的旧函数，阶段A先继续填 dx/dy/dz
+    // 为兼容后续尚未改造的旧函数，先继续填 dx/dy/dz
     c.dx = c.bbox_max.x - c.bbox_min.x;
     c.dy = c.bbox_max.y - c.bbox_min.y;
     c.dz = c.bbox_max.z - c.bbox_min.z;
@@ -322,9 +447,11 @@ void computeFaceDerivedGeometry(FaceGeom& f, const Point3& owner_center) {
     }
 }
 
+// =============================================================================
+// 4. 几何辅助函数：传导率相关几何
+// =============================================================================
 
-double normalProjectedPerm(const Cell& c, const Point3& n_unit)
-{
+double normalProjectedPerm(const Cell& c, const Point3& n_unit) {
     // 当前仍假设 K 为对角渗透率张量
     // k_n = n^T K n
     return
@@ -333,8 +460,7 @@ double normalProjectedPerm(const Cell& c, const Point3& n_unit)
         n_unit.z * n_unit.z * c.K[2];
 }
 
-double centerToFaceNormalDistance(const Cell& c, const FaceGeom& f)
-{
+double centerToFaceNormalDistance(const Cell& c, const FaceGeom& f) {
     // FaceGeom::normal 约定为单位法向
     // 对 TPFA，这里取 center 到面中心沿 face 法向的投影距离
     double d = std::abs((f.center - c.center).dot(f.normal));
@@ -343,8 +469,7 @@ double centerToFaceNormalDistance(const Cell& c, const FaceGeom& f)
 
 double computeMMTransmissibilityTPFA(const Cell& cu,
                                      const Cell& cv,
-                                     const FaceGeom& f)
-{
+                                     const FaceGeom& f) {
     // 共享面面积
     double Af = f.area;
     if (Af <= EPSILON) return 0.0;
@@ -369,9 +494,7 @@ double computeMMTransmissibilityTPFA(const Cell& cu,
     return (tau_u * tau_v) / std::max(EPSILON, tau_u + tau_v);
 }
 
-
-Point3 mapHexTrilinear(const Cell& cell, double u, double v, double w)
-{
+Point3 mapHexTrilinear(const Cell& cell, double u, double v, double w) {
     const auto& c = cell.corners;
 
     double N0 = (1.0 - u) * (1.0 - v) * (1.0 - w);
@@ -387,12 +510,10 @@ Point3 mapHexTrilinear(const Cell& cell, double u, double v, double w)
          + c[4] * N4 + c[5] * N5 + c[6] * N6 + c[7] * N7;
 }
 
-
 double averageDistanceCellToPlane(const Cell& cell,
                                   const Point3& planePoint,
                                   const Point3& unitNormal,
-                                  int nxs = 2, int nys = 2, int nzs = 2)
-{
+                                  int nxs = 2, int nys = 2, int nzs = 2) {
     double sum = 0.0;
     int count = 0;
 
@@ -417,8 +538,7 @@ double averageDistanceCellToPlane(const Cell& cell,
 
 double computeMatrixFractureTransmissibility(const Cell& cell,
                                              const Segment& seg,
-                                             int nxs = 2, int nys = 2, int nzs = 2)
-{
+                                             int nxs = 2, int nys = 2, int nzs = 2) {
     if (seg.area <= EPSILON) return 0.0;
 
     // 裂缝法向应为单位向量；这里再做一次保护
@@ -438,7 +558,7 @@ double computeMatrixFractureTransmissibility(const Cell& cell,
     double scale = std::max(1.0, std::max(cell.dx, std::max(cell.dy, cell.dz)));
     d_avg = std::max(d_avg, 1e-10 * scale);
 
-    // 延续你当前代码的 EDFM 近似：
+    // EDFM 近似：
     // Tmf = 2 * A * Kn / d_avg
     double Tmf = 2.0 * seg.area * (Kn / d_avg);
 
@@ -446,18 +566,17 @@ double computeMatrixFractureTransmissibility(const Cell& cell,
     return Tmf;
 }
 
+// =============================================================================
+// 5. 几何辅助函数：裂缝局部坐标 / 等效半径
+// =============================================================================
 
-
-Point3 fractureCenter(const Fracture& f)
-{
+Point3 fractureCenter(const Fracture& f) {
     Point3 c{0, 0, 0};
     for (int i = 0; i < 4; ++i) c = c + f.vertices[i];
     return c / 4.0;
 }
 
-
-void buildPlaneBasisFromNormal(const Point3& normal, Point3& e1, Point3& e2)
-{
+void buildPlaneBasisFromNormal(const Point3& normal, Point3& e1, Point3& e2) {
     Point3 n = normal;
     double nn = n.norm();
     if (nn < EPSILON) {
@@ -501,8 +620,7 @@ void buildPlaneBasisFromNormal(const Point3& normal, Point3& e1, Point3& e2)
     }
 }
 
-bool computeSegmentLocalPlaneExtents(const Segment& seg, double& Lu, double& Lv)
-{
+bool computeSegmentLocalPlaneExtents(const Segment& seg, double& Lu, double& Lv) {
     Lu = 0.0;
     Lv = 0.0;
 
@@ -540,9 +658,7 @@ bool computeSegmentLocalPlaneExtents(const Segment& seg, double& Lu, double& Lv)
     return (Lu > EPSILON && Lv > EPSILON);
 }
 
-
-double computeSegmentEquivalentRadius(const Segment& seg, double rw)
-{
+double computeSegmentEquivalentRadius(const Segment& seg, double rw) {
     double Lu = 0.0, Lv = 0.0;
     bool ok = computeSegmentLocalPlaneExtents(seg, Lu, Lv);
 
@@ -565,14 +681,11 @@ double computeSegmentEquivalentRadius(const Segment& seg, double rw)
     return re;
 }
 
-
-
-
 // =============================================================================
-// 2. 几何计算模块 (3D Sutherland-Hodgman 剪裁)
+// 6. 几何辅助函数：多边形裁剪主链
 // =============================================================================
 
-// 计算多边形面积  a和b叉积的模就是以a，b为边的平行四边形面积，这里是定一个点，拆成了多个三角形
+// 计算多边形面积
 double polygonArea(const std::vector<Point3>& poly) {
     if (poly.size() < 3) return 0.0;
     Point3 total = {0, 0, 0};
@@ -584,7 +697,8 @@ double polygonArea(const std::vector<Point3>& poly) {
     }
     return 0.5 * total.norm();
 }
-//计算面积质心
+
+// 计算面积质心
 Point3 polygonCenter(const std::vector<Point3>& poly) {
     Point3 c{0, 0, 0};
     if (poly.empty()) return c;
@@ -622,7 +736,7 @@ bool isInside(const Point3& p, const Point3& planeNormal, double planeD) {
     return (planeNormal.dot(p) + planeD) >= -1e-9;
 }
 
-// 计算线段与平面的交点  加入容差！！！
+// 计算线段与平面的交点
 Point3 intersectPlane(const Point3& p1, const Point3& p2,
                       const Point3& planeNormal, double planeD) {
     double d1 = planeNormal.dot(p1) + planeD;
@@ -641,7 +755,9 @@ Point3 intersectPlane(const Point3& p1, const Point3& p2,
 }
 
 // Sutherland-Hodgman 多边形剪裁 (针对一个平面)
-std::vector<Point3> clipPolygonCurrentPlane(const std::vector<Point3>& inputPoly, const Point3& normal, double d) {
+std::vector<Point3> clipPolygonCurrentPlane(const std::vector<Point3>& inputPoly,
+                                            const Point3& normal,
+                                            double d) {
     std::vector<Point3> outputPoly;
     if (inputPoly.empty()) return outputPoly;
 
@@ -664,11 +780,9 @@ std::vector<Point3> clipPolygonCurrentPlane(const std::vector<Point3>& inputPoly
     return outputPoly;
 }
 
-
 bool bboxOverlap(const Point3& a_min, const Point3& a_max,
                  const Point3& b_min, const Point3& b_max,
-                 double tol = 1e-12)
-{
+                 double tol = 1e-12) {
     if (a_max.x < b_min.x - tol || b_max.x < a_min.x - tol) return false;
     if (a_max.y < b_min.y - tol || b_max.y < a_min.y - tol) return false;
     if (a_max.z < b_min.z - tol || b_max.z < a_min.z - tol) return false;
@@ -678,8 +792,7 @@ bool bboxOverlap(const Point3& a_min, const Point3& a_max,
 // 清理裁剪后的 polygon：
 // 1) 去掉连续重复点
 // 2) 若首尾重复，去掉尾点
-std::vector<Point3> cleanupPolygon3D(const std::vector<Point3>& poly, double tol)
-{
+std::vector<Point3> cleanupPolygon3D(const std::vector<Point3>& poly, double tol) {
     std::vector<Point3> out;
     if (poly.empty()) return out;
 
@@ -702,8 +815,7 @@ bool getInwardPlaneForCellFace(const Cell& cell,
                                const std::vector<FaceGeom>& faces,
                                int local_face_id,
                                Point3& n_in,
-                               double& d)
-{
+                               double& d) {
     int fid = cell.face_ids[local_face_id];
     if (fid < 0) return false;
 
@@ -728,8 +840,7 @@ bool getInwardPlaneForCellFace(const Cell& cell,
 // 用一个一般六面体 cell 的 6 个真实面，逐面裁剪 polygon
 std::vector<Point3> clipPolygonByCell(const std::vector<Point3>& inputPoly,
                                       const Cell& cell,
-                                      const std::vector<FaceGeom>& faces)
-{
+                                      const std::vector<FaceGeom>& faces) {
     std::vector<Point3> poly = inputPoly;
 
     double scale = std::max(1.0, std::max(cell.dx, std::max(cell.dy, cell.dz)));
@@ -755,12 +866,9 @@ std::vector<Point3> clipPolygonByCell(const std::vector<Point3>& inputPoly,
     return poly;
 }
 
-
-
 std::vector<Point3> clipFractureBox(const Fracture& frac,
                                     const Cell& cell,
-                                    const std::vector<FaceGeom>& faces)
-{
+                                    const std::vector<FaceGeom>& faces) {
     std::vector<Point3> poly;
     for (int i = 0; i < 4; ++i) poly.push_back(frac.vertices[i]);
 
@@ -777,25 +885,23 @@ std::vector<Point3> clipFractureBox(const Fracture& frac,
     return poly;
 }
 
+// =============================================================================
+// 7. 几何辅助函数：face-trace 提取
+// =============================================================================
 
-
-void pushUniquePoint(std::vector<Point3>& pts, const Point3& p, double tol) {   //点去重辅助
+void pushUniquePoint(std::vector<Point3>& pts, const Point3& p, double tol) {   // 点去重辅助
     for (const auto& q : pts) {
         if ((p - q).norm() <= tol) return;
     }
     pts.push_back(p);
 }
 
-
-
-
 // 3D三角形内点判断（假设点已与三角形近共面）
 bool pointInTriangle3D(const Point3& p,
                        const Point3& a,
                        const Point3& b,
                        const Point3& c,
-                       double tol)
-{
+                       double tol) {
     Point3 v0 = b - a;
     Point3 v1 = c - a;
     Point3 v2 = p - a;
@@ -819,21 +925,16 @@ bool pointInTriangle3D(const Point3& p,
 // 凸四边形内点判断：拆成两个三角形
 bool pointInConvexQuad3D(const Point3& p,
                          const std::array<Point3, 4>& q,
-                         double tol)
-{
+                         double tol) {
     return pointInTriangle3D(p, q[0], q[1], q[2], tol) ||
            pointInTriangle3D(p, q[0], q[2], q[3], tol);
 }
-
-
-
 
 bool pointOnCellFace(const Point3& p,
                      const Cell& cell,
                      const std::vector<FaceGeom>& faces,
                      int face_id,
-                     double tol)
-{
+                     double tol) {
     int fid = cell.face_ids[face_id];
     if (fid < 0) return false;
 
@@ -855,8 +956,7 @@ bool extractTraceOnFace(const std::vector<Point3>& poly,
                         int face_id,
                         Point3& a,
                         Point3& b,
-                        double& len)
-{
+                        double& len) {
     len = 0.0;
     if (poly.size() < 2) return false;
 
@@ -935,7 +1035,7 @@ bool extractTraceOnFace(const std::vector<Point3>& poly,
     return true;
 }
 
-double pointToLineDistance3D(const Point3& p, const Point3& a, const Point3& b) { //点到3D无限直线的距离
+double pointToLineDistance3D(const Point3& p, const Point3& a, const Point3& b) { // 点到3D无限直线的距离
     Point3 ab = b - a;
     double lab = ab.norm();
     if (lab < EPSILON) return 0.0;
@@ -945,8 +1045,7 @@ double pointToLineDistance3D(const Point3& p, const Point3& a, const Point3& b) 
 void fillSegmentFaceGeom(Segment& seg,
                          const std::vector<Point3>& poly,
                          const Cell& cell,
-                         const std::vector<FaceGeom>& faces)
-{
+                         const std::vector<FaceGeom>& faces) {
     for (int f = 0; f < 6; ++f) {
         seg.face_trace_len[f] = 0.0;
         seg.face_center_dist[f] = 0.0;
@@ -963,7 +1062,11 @@ void fillSegmentFaceGeom(Segment& seg,
     }
 }
 
-std::pair<int,int> getSharedFaces(const Cell& c1, const Cell& c2) {  //判断两个相邻 cell 共享哪两个面
+// =============================================================================
+// 8. 几何辅助函数：裂缝-裂缝连接几何
+// =============================================================================
+
+std::pair<int,int> getSharedFaces(const Cell& c1, const Cell& c2) {  // 判断两个相邻 cell 共享哪两个面
     int dix = c2.ix - c1.ix;
     int diy = c2.iy - c1.iy;
     int diz = c2.iz - c1.iz;
@@ -980,13 +1083,11 @@ std::pair<int,int> getSharedFaces(const Cell& c1, const Cell& c2) {  //判断两
     return {-1, -1};
 }
 
-
 bool getSharedFacePairByFaceIds(const Cell& c1,
                                 const Cell& c2,
                                 int& lf1,
                                 int& lf2,
-                                int& shared_fid)
-{
+                                int& shared_fid) {
     lf1 = -1;
     lf2 = -1;
     shared_fid = -1;
@@ -1011,31 +1112,23 @@ bool getSharedFacePairByFaceIds(const Cell& c1,
     return false;
 }
 
-
-
-
-
-
-double pointToSegmentDistance3D(const Point3& p, const Point3& a, const Point3& b) //点到有限线段的最短距离
-{
+double pointToSegmentDistance3D(const Point3& p, const Point3& a, const Point3& b) {
     Point3 ab = b - a;
     double ab2 = ab.dot(ab);
     if (ab2 < EPSILON) {
         return (p - a).norm();   // 退化成一个点
     }
 
-    double t = (p - a).dot(ab) / ab2;    //利用q点，p-q垂直于b-a，p-q与b-a的点积为0
-    t = std::max(0.0, std::min(1.0, t));  //把t限制在线段上
+    double t = (p - a).dot(ab) / ab2;
+    t = std::max(0.0, std::min(1.0, t));
 
-    Point3 q = a + ab * t;   // 线段上最近点
+    Point3 q = a + ab * t;
     return (p - q).norm();
 }
 
-
-bool intersectTwoPlanes(const Point3& n1, const Point3& p1,   //求两个无限平面的交线
+bool intersectTwoPlanes(const Point3& n1, const Point3& p1,
                         const Point3& n2, const Point3& p2,
-                        Point3& linePoint, Point3& lineDir)
-{
+                        Point3& linePoint, Point3& lineDir) {
     // 原始方向（未归一化）
     Point3 dir = n1.cross(n2);
     double dir2 = dir.dot(dir);
@@ -1051,24 +1144,23 @@ bool intersectTwoPlanes(const Point3& n1, const Point3& p1,   //求两个无限�
     // 交线上一点
     Point3 term1 = n2.cross(dir) * d1;
     Point3 term2 = dir.cross(n1) * d2;
-    linePoint = (term1 + term2) * (1.0 / dir2);  //交线上某点，即X0
+    linePoint = (term1 + term2) * (1.0 / dir2);
 
     // 把方向单位化，后面裁剪更方便
-    lineDir = dir * (1.0 / std::sqrt(dir2));  //交线方向（单位向量）
+    lineDir = dir * (1.0 / std::sqrt(dir2));
 
     return true;
 }
 
-bool clipLineByConvexPolygon(const std::vector<Point3>& poly,  //把一条直线x(t)=linePoint+tlineDir 用一个凸多边形裁剪，求出这条直线落在多边形内部的那一段参数区间[tmin,tmax]
+bool clipLineByConvexPolygon(const std::vector<Point3>& poly,
                              const Point3& normal,
                              const Point3& linePoint,
                              const Point3& lineDir,
                              double& tmin,
-                             double& tmax)
-{
+                             double& tmax) {
     if (poly.size() < 3) return false;
 
-    Point3 centroid = polygonCenter(poly);   // 你现在这个 polygonCenter 已经是面积质心版本
+    Point3 centroid = polygonCenter(poly);
 
     tmin = -1e100;
     tmax =  1e100;
@@ -1099,7 +1191,6 @@ bool clipLineByConvexPolygon(const std::vector<Point3>& poly,  //把一条直线
         if (std::abs(den) < tol) {
             // 若 linePoint 在外侧，则整条线都在外面
             if (c < -tol) return false;
-            // 否则这条边对 t 没约束
             continue;
         }
 
@@ -1120,12 +1211,11 @@ bool clipLineByConvexPolygon(const std::vector<Point3>& poly,  //把一条直线
     return true;
 }
 
-bool computeCrossIntersectionSegment(const Segment& seg1,  //
+bool computeCrossIntersectionSegment(const Segment& seg1,
                                      const Segment& seg2,
                                      Point3& a,
                                      Point3& b,
-                                     double& ell_int)
-{
+                                     double& ell_int) {
     ell_int = 0.0;
 
     // 1) 先求两平面的交线
@@ -1173,8 +1263,7 @@ bool computeCrossGeom(const Segment& seg1,
                       const Segment& seg2,
                       double& ell_int,
                       double& L1,
-                      double& L2)
-{
+                      double& L2) {
     Point3 a, b;
     if (!computeCrossIntersectionSegment(seg1, seg2, a, b, ell_int)) {
         return false;
@@ -1191,7 +1280,7 @@ bool computeCrossGeom(const Segment& seg1,
 }
 
 // =============================================================================
-// 3. 物理模型辅助函数 (PVT & RelPerm)
+// 9. 物理模型辅助函数 (PVT & RelPerm)
 // =============================================================================
 
 FluidProps g_props;
@@ -1205,6 +1294,10 @@ void calcPVT(const T& P, T& Bw, T& Bo, T& Bg, T& dBw_dP, T& dBo_dP, T& dBg_dP) {
     Bw = exp(-g_props.cw * dP);
     Bo = exp(-g_props.co * dP);
     Bg = exp(-g_props.cg * dP);
+
+    dBw_dP = -g_props.cw * Bw;
+    dBo_dP = -g_props.co * Bo;
+    dBg_dP = -g_props.cg * Bg;
 }
 
 // 计算相对渗透率 (Corey Model)
@@ -1218,7 +1311,7 @@ void calcRelPerm(const T& Sw, const T& Sg, T& krw, T& kro, T& krg) {
     T Sg_norm = (Sg - g_props.Sgc) / (1.0 - g_props.Sgc - g_props.Swi - g_props.Sor);
     Sw_norm = clamp01_T(Sw_norm);
     Sg_norm = clamp01_T(Sg_norm);
-    
+
     krw = Sw_norm * Sw_norm;
     krg = Sg_norm * Sg_norm;
     T So_norm = clamp01_T(T(1.0) - Sw_norm - Sg_norm);
@@ -1226,11 +1319,7 @@ void calcRelPerm(const T& Sw, const T& Sg, T& krw, T& kro, T& krg) {
 }
 
 // =============================================================================
-// 4. 模拟器类 (Simulator)
-// =============================================================================
-
-// =============================================================================
-// 4. 模拟器类 (Simulator) - 性能优化版
+// 10. 模拟器类
 // =============================================================================
 
 class Simulator {
@@ -1243,34 +1332,34 @@ public:
     std::vector<Fracture> fractures;
     std::vector<Segment> segments;
     std::vector<FaceGeom> faces;
+
     // --- 拓扑连接优化 ---
-    // 原有的 connections 用于全局遍历，新增 adj 用于快速查找邻居
     std::vector<Connection> connections;
-    
-    // 邻接表结构：adj[u] 包含所有连接到 u 的 {v, T, type}
+
     struct Neighbor {
-        int v;      // 邻居节点索引
-        double T;   // 传导率
-        int conn_idx; // 在全局 connections 中的下标（可选，用于调试）
+        int v;       // 邻居节点索引
+        double T;    // 传导率
+        int conn_idx; // 在全局 connections 中的下标
     };
-    std::vector<std::vector<Neighbor>> adj; // adj[u] -> list of neighbors
+    std::vector<std::vector<Neighbor>> adj;
 
     // 状态量
     int n_matrix;
     int n_frac_nodes;
     int n_total;
-    
-    std::vector<State> states; 
-    std::vector<State> states_prev; 
-    
+
+    std::vector<State> states;
+    std::vector<State> states_prev;
+
     struct Well {
-        int target_node_idx; 
-        double WI; 
+        int target_node_idx;
+        double WI;
         double P_bhp;
     };
     std::vector<Well> wells;
+
     // 井的快速查找：well_map[node_idx] -> well_idx
-    std::map<int, int> well_map; 
+    std::map<int, int> well_map;
 
     SparseMatrix<double> J;
     struct CellOffsets { int diag[3][3]; };
@@ -1280,10 +1369,12 @@ public:
 
     Simulator() {
         Lx = 3000; Ly = 300; Lz = 40;
-        Nx = 150; Ny = 15; Nz = 2; 
-        dx = Lx/Nx; dy = Ly/Ny; dz = Lz/Nz;
+        Nx = 150; Ny = 15; Nz = 2;
+        dx = Lx / Nx; dy = Ly / Ny; dz = Lz / Nz;
+        n_matrix = 0;
+        n_frac_nodes = 0;
+        n_total = 0;
     }
-
 
     int getNextFractureId() const {
         int max_id = -1;
@@ -1293,8 +1384,553 @@ public:
         return max_id + 1;
     }
 
+    // =========================================================================
+    // 10.1 读取 COORD.csv
+    // =========================================================================
+    bool loadCOORD(const std::string& filename,
+                   std::vector<Pillar>& pillars,
+                   int& coord_max_i,
+                   int& coord_max_j) const {
+        std::ifstream fin(filename);
+        if (!fin.is_open()) {
+            std::cerr << "Error: cannot open COORD file: " << filename << std::endl;
+            return false;
+        }
 
+        std::string line;
+        int line_no = 0;
 
+        // 跳过首行表头
+        if (!std::getline(fin, line)) {
+            std::cerr << "Error: COORD file is empty: " << filename << std::endl;
+            return false;
+        }
+        line_no++;
+
+        std::vector<CoordRow> rows;
+        coord_max_i = 0;
+        coord_max_j = 0;
+
+        while (std::getline(fin, line)) {
+            line_no++;
+
+            line = trim(line);
+            if (line.empty()) continue;
+
+            std::vector<std::string> cols = splitCSVSimple(line);
+            if (cols.size() < 6) {
+                std::cerr << "Error: COORD line " << line_no
+                          << " has fewer than 6 columns." << std::endl;
+                return false;
+            }
+
+            int i1 = 0, j1 = 0;
+            double x = 0.0, y = 0.0, z = 0.0;
+
+            if (!parseIntStrict(cols[0], i1) || !parseIntStrict(cols[1], j1)) {
+                std::cerr << "Error: COORD line " << line_no
+                          << " failed to parse X(I)/Y(J)." << std::endl;
+                return false;
+            }
+            if (i1 <= 0 || j1 <= 0) {
+                std::cerr << "Error: COORD line " << line_no
+                          << " has non-positive pillar index." << std::endl;
+                return false;
+            }
+
+            bool is_top = false;
+            bool is_bot = false;
+            if (isTopMarker(cols[2])) {
+                is_top = true;
+            } else if (isBottomMarker(cols[2])) {
+                is_bot = true;
+            } else {
+                std::cerr << "Error: COORD line " << line_no
+                          << " has invalid Z(K) marker: " << cols[2]
+                          << " , expected 顶/底 or top/bottom." << std::endl;
+                return false;
+            }
+
+            if (!parseDoubleStrict(cols[3], x) ||
+                !parseDoubleStrict(cols[4], y) ||
+                !parseDoubleStrict(cols[5], z)) {
+                std::cerr << "Error: COORD line " << line_no
+                          << " failed to parse 坐标X/坐标Y/坐标Z." << std::endl;
+                return false;
+            }
+
+            CoordRow r;
+            r.i = i1 - 1; // 文件从 1 开始，内部转 0-based
+            r.j = j1 - 1;
+            r.is_top = is_top;
+            r.p = {x, y, z};
+
+            rows.push_back(r);
+
+            coord_max_i = std::max(coord_max_i, i1);
+            coord_max_j = std::max(coord_max_j, j1);
+        }
+
+        if (rows.empty()) {
+            std::cerr << "Error: COORD file contains no data rows." << std::endl;
+            return false;
+        }
+
+        pillars.assign(coord_max_i * coord_max_j, Pillar{});
+
+        // 回填每根 pillar 的 top / bottom
+        for (const auto& r : rows) {
+            int idx = flatPillarIndex(r.i, r.j, coord_max_i);
+            Pillar& p = pillars[idx];
+
+            if (r.is_top) {
+                if (p.has_top) {
+                    std::cerr << "Error: duplicate TOP record for pillar("
+                              << (r.i + 1) << "," << (r.j + 1) << ")." << std::endl;
+                    return false;
+                }
+                p.top = r.p;
+                p.has_top = true;
+            } else {
+                if (p.has_bot) {
+                    std::cerr << "Error: duplicate BOTTOM record for pillar("
+                              << (r.i + 1) << "," << (r.j + 1) << ")." << std::endl;
+                    return false;
+                }
+                p.bot = r.p;
+                p.has_bot = true;
+            }
+        }
+
+        // 完整性检查
+        for (int j = 0; j < coord_max_j; ++j) {
+            for (int i = 0; i < coord_max_i; ++i) {
+                const Pillar& p = pillars[flatPillarIndex(i, j, coord_max_i)];
+
+                if (!p.has_top || !p.has_bot) {
+                    std::cerr << "Error: pillar(" << (i + 1) << "," << (j + 1)
+                              << ") missing "
+                              << ((!p.has_top && !p.has_bot) ? "top and bottom" :
+                                  (!p.has_top ? "top" : "bottom"))
+                              << " record." << std::endl;
+                    return false;
+                }
+
+                if (std::abs(p.bot.z - p.top.z) < EPSILON) {
+                    std::cerr << "Error: pillar(" << (i + 1) << "," << (j + 1)
+                              << ") has Z_top == Z_bottom, cannot interpolate." << std::endl;
+                    return false;
+                }
+
+                // 本项目约定：顶的 Z 更大，底的 Z 更小
+                if (!(p.top.z > p.bot.z)) {
+                    std::cerr << "Error: pillar(" << (i + 1) << "," << (j + 1)
+                              << ") violates height convention: Z_top must be > Z_bottom."
+                              << std::endl;
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    // =========================================================================
+    // 10.2 读取 ZCORN.csv
+    // =========================================================================
+    bool loadZCORN(const std::string& filename,
+                   std::vector<std::array<double, 8>>& zcorn_cells,
+                   int& zcorn_max_i,
+                   int& zcorn_max_j,
+                   int& zcorn_max_k) const {
+        std::ifstream fin(filename);
+        if (!fin.is_open()) {
+            std::cerr << "Error: cannot open ZCORN file: " << filename << std::endl;
+            return false;
+        }
+
+        std::string line;
+        int line_no = 0;
+
+        // 跳过首行表头
+        if (!std::getline(fin, line)) {
+            std::cerr << "Error: ZCORN file is empty: " << filename << std::endl;
+            return false;
+        }
+        line_no++;
+
+        std::vector<ZCornRow> rows;
+        zcorn_max_i = 0;
+        zcorn_max_j = 0;
+        zcorn_max_k = 0;
+
+        while (std::getline(fin, line)) {
+            line_no++;
+
+            line = trim(line);
+            if (line.empty()) continue;
+
+            std::vector<std::string> cols = splitCSVSimple(line);
+            if (cols.size() < 11) {
+                std::cerr << "Error: ZCORN line " << line_no
+                          << " has fewer than 11 columns." << std::endl;
+                return false;
+            }
+
+            int i1 = 0, j1 = 0, k1 = 0;
+            if (!parseIntStrict(cols[0], i1) ||
+                !parseIntStrict(cols[1], j1) ||
+                !parseIntStrict(cols[2], k1)) {
+                std::cerr << "Error: ZCORN line " << line_no
+                          << " failed to parse X(I)/Y(J)/Z(K)." << std::endl;
+                return false;
+            }
+
+            if (i1 <= 0 || j1 <= 0 || k1 <= 0) {
+                std::cerr << "Error: ZCORN line " << line_no
+                          << " has non-positive cell index." << std::endl;
+                return false;
+            }
+
+            ZCornRow zr;
+            zr.i = i1 - 1; // 转 0-based
+            zr.j = j1 - 1;
+            zr.k = k1 - 1;
+
+            for (int t = 0; t < 8; ++t) {
+                if (!parseDoubleStrict(cols[3 + t], zr.z[t])) {
+                    std::cerr << "Error: ZCORN line " << line_no
+                              << " failed to parse Z" << (t + 1) << "." << std::endl;
+                    return false;
+                }
+            }
+
+            // 高度坐标约定：顶面四点 Z 应大于底面四点 Z
+            if (!(zr.z[0] > zr.z[4] &&
+                  zr.z[1] > zr.z[5] &&
+                  zr.z[2] > zr.z[6] &&
+                  zr.z[3] > zr.z[7])) {
+                std::cerr << "Error: ZCORN line " << line_no
+                          << " violates height convention: top Z must be greater than bottom Z."
+                          << std::endl;
+                return false;
+            }
+
+            rows.push_back(zr);
+
+            zcorn_max_i = std::max(zcorn_max_i, i1);
+            zcorn_max_j = std::max(zcorn_max_j, j1);
+            zcorn_max_k = std::max(zcorn_max_k, k1);
+        }
+
+        if (rows.empty()) {
+            std::cerr << "Error: ZCORN file contains no data rows." << std::endl;
+            return false;
+        }
+
+        int total_cells = zcorn_max_i * zcorn_max_j * zcorn_max_k;
+        zcorn_cells.assign(total_cells, std::array<double, 8>{{0, 0, 0, 0, 0, 0, 0, 0}});
+        std::vector<char> seen(total_cells, 0);
+
+        for (const auto& zr : rows) {
+            int idx = flatCellIndex(zr.i, zr.j, zr.k, zcorn_max_i, zcorn_max_j);
+
+            if (seen[idx]) {
+                std::cerr << "Error: duplicate ZCORN record for cell("
+                          << (zr.i + 1) << "," << (zr.j + 1) << "," << (zr.k + 1)
+                          << ")." << std::endl;
+                return false;
+            }
+
+            seen[idx] = 1;
+            zcorn_cells[idx] = zr.z;
+        }
+
+        // 检查缺失 cell
+        for (int k = 0; k < zcorn_max_k; ++k) {
+            for (int j = 0; j < zcorn_max_j; ++j) {
+                for (int i = 0; i < zcorn_max_i; ++i) {
+                    int idx = flatCellIndex(i, j, k, zcorn_max_i, zcorn_max_j);
+                    if (!seen[idx]) {
+                        std::cerr << "Error: missing ZCORN record for cell("
+                                  << (i + 1) << "," << (j + 1) << "," << (k + 1)
+                                  << ")." << std::endl;
+                        return false;
+                    }
+                }
+            }
+        }
+
+        return true;
+    }
+
+    // =========================================================================
+    // 10.3 pillar 直线插值
+    // =========================================================================
+    Point3 interpolateOnPillar(const Pillar& p, double zc) const {
+        if (!p.has_top || !p.has_bot) {
+            throw std::runtime_error("pillar missing top or bottom endpoint.");
+        }
+
+        double zt = p.top.z;
+        double zb = p.bot.z;
+        double denom = zb - zt;
+
+        if (std::abs(denom) < EPSILON) {
+            throw std::runtime_error("pillar has Z_top == Z_bottom, cannot interpolate.");
+        }
+
+        // 题目要求的插值公式：
+        // lambda = (Zc - Zt) / (Zb - Zt)
+        // Pc = Ptop + lambda * (Pbot - Ptop)
+        double lambda = (zc - zt) / denom;
+
+        Point3 pc = p.top + (p.bot - p.top) * lambda;
+
+        // 数值上强制回写目标 Z，避免浮点误差
+        pc.z = zc;
+        return pc;
+    }
+
+    // =========================================================================
+    // 10.4 从 COORD.csv + ZCORN.csv 初始化 corner-point grid
+    // =========================================================================
+    bool initGridFromCornerPointCSV(const std::string& coordFile,
+                                    const std::string& zcornFile) {
+        // 清空旧网格相关数据
+        cells.clear();
+        faces.clear();
+        fractures.clear();
+        segments.clear();
+        connections.clear();
+        wells.clear();
+        well_map.clear();
+        states.clear();
+        states_prev.clear();
+        adj.clear();
+
+        std::vector<Pillar> pillars;
+        std::vector<std::array<double, 8>> zcorn_cells;
+
+        int coord_max_i = 0, coord_max_j = 0;
+        int zcorn_max_i = 0, zcorn_max_j = 0, zcorn_max_k = 0;
+
+        // 1) 读取 COORD.csv，恢复 pillar
+        if (!loadCOORD(coordFile, pillars, coord_max_i, coord_max_j)) {
+            std::cerr << "Error: failed to load COORD file." << std::endl;
+            return false;
+        }
+
+        // 2) 读取 ZCORN.csv，恢复每个 cell 的 Z1~Z8
+        if (!loadZCORN(zcornFile, zcorn_cells, zcorn_max_i, zcorn_max_j, zcorn_max_k)) {
+            std::cerr << "Error: failed to load ZCORN file." << std::endl;
+            return false;
+        }
+
+        // 3) 一致性检查
+        if (coord_max_i != zcorn_max_i + 1) {
+            std::cerr << "Error: inconsistent grid size in I direction: "
+                      << "COORD max I = " << coord_max_i
+                      << ", but ZCORN max I = " << zcorn_max_i
+                      << " , expected COORD max I = ZCORN max I + 1." << std::endl;
+            return false;
+        }
+
+        if (coord_max_j != zcorn_max_j + 1) {
+            std::cerr << "Error: inconsistent grid size in J direction: "
+                      << "COORD max J = " << coord_max_j
+                      << ", but ZCORN max J = " << zcorn_max_j
+                      << " , expected COORD max J = ZCORN max J + 1." << std::endl;
+            return false;
+        }
+
+        // 4) 自动推断网格尺寸
+        Nx = zcorn_max_i;
+        Ny = zcorn_max_j;
+        Nz = zcorn_max_k;
+
+        n_matrix = Nx * Ny * Nz;
+        n_frac_nodes = 0;
+        n_total = n_matrix;
+
+        cells.resize(n_matrix);
+
+        auto getPillar = [&](int i, int j) -> const Pillar& {
+            if (i < 0 || i >= coord_max_i || j < 0 || j >= coord_max_j) {
+                std::ostringstream oss;
+                oss << "pillar index out of range: (" << (i + 1) << "," << (j + 1) << ")";
+                throw std::runtime_error(oss.str());
+            }
+            return pillars[flatPillarIndex(i, j, coord_max_i)];
+        };
+
+        try {
+            // 5) 逐个 cell 构造 8 个完整三维角点
+            for (int k = 0; k < Nz; ++k) {
+                for (int j = 0; j < Ny; ++j) {
+                    for (int i = 0; i < Nx; ++i) {
+                        int id = flatCellIndex(i, j, k, Nx, Ny);
+
+                        Cell c;
+                        c.id = id;
+                        c.ix = i;
+                        c.iy = j;
+                        c.iz = k;
+
+                        // 当前 cell 对应四根 pillar：
+                        // 左下：pillar(i, j)
+                        // 右下：pillar(i+1, j)
+                        // 左上：pillar(i, j+1)
+                        // 右上：pillar(i+1, j+1)
+                        const Pillar& p_ll = getPillar(i,     j    ); // 左下
+                        const Pillar& p_lr = getPillar(i + 1, j    ); // 右下
+                        const Pillar& p_ul = getPillar(i,     j + 1); // 左上
+                        const Pillar& p_ur = getPillar(i + 1, j + 1); // 右上
+
+                        // 取出当前 cell 的 Z1~Z8
+                        const auto& z = zcorn_cells[id];
+                        // z[0]=Z1, z[1]=Z2, ..., z[7]=Z8
+
+                        // --------------------------------------------------------
+                        // 严格按你的要求做 ZCORN -> corners[0..7] 映射：
+                        //
+                        // ZCORN 顶面/底面顺序：
+                        // 顶面：Z1 Z2 Z3 Z4 = 左下 右下 左上 右上
+                        // 底面：Z5 Z6 Z7 Z8 = 左下 右下 左上 右上
+                        //
+                        // 现有代码的 corners 顺序必须保持为：
+                        // 底面：左下、右下、右上、左上
+                        // 顶面：左下、右下、右上、左上
+                        //
+                        // 所以：
+                        // corner[0] <- Z5 on 左下 pillar
+                        // corner[1] <- Z6 on 右下 pillar
+                        // corner[2] <- Z8 on 右上 pillar
+                        // corner[3] <- Z7 on 左上 pillar
+                        // corner[4] <- Z1 on 左下 pillar
+                        // corner[5] <- Z2 on 右下 pillar
+                        // corner[6] <- Z4 on 右上 pillar
+                        // corner[7] <- Z3 on 左上 pillar
+                        //
+                        // 即：
+                        // corners = [Z5, Z6, Z8, Z7, Z1, Z2, Z4, Z3]
+                        // --------------------------------------------------------
+
+                        c.corners[0] = interpolateOnPillar(p_ll, z[4]); // Z5
+                        c.corners[1] = interpolateOnPillar(p_lr, z[5]); // Z6
+                        c.corners[2] = interpolateOnPillar(p_ur, z[7]); // Z8
+                        c.corners[3] = interpolateOnPillar(p_ul, z[6]); // Z7
+
+                        c.corners[4] = interpolateOnPillar(p_ll, z[0]); // Z1
+                        c.corners[5] = interpolateOnPillar(p_lr, z[1]); // Z2
+                        c.corners[6] = interpolateOnPillar(p_ur, z[3]); // Z4
+                        c.corners[7] = interpolateOnPillar(p_ul, z[2]); // Z3
+
+                        // 物性参数沿用原代码默认值
+                        c.phi = 0.04;
+                        c.K[0] = 0.005;
+                        c.K[1] = 0.005;
+                        c.K[2] = 0.005;
+
+                        // 用现有几何函数反算 center / bbox / vol / depth
+                        computeCellDerivedGeometry(c);
+
+                        cells[id] = c;
+                    }
+                }
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "Error while constructing corner-point cells: "
+                      << e.what() << std::endl;
+            return false;
+        }
+
+        // 6) 兼容后续仍会用到的 Lx/Ly/Lz/dx/dy/dz，
+        //    这里用全局 bbox 给出一个名义值
+        if (!cells.empty()) {
+            Point3 gmin = cells[0].bbox_min;
+            Point3 gmax = cells[0].bbox_max;
+
+            for (const auto& c : cells) {
+                gmin = pointMin(gmin, c.bbox_min);
+                gmax = pointMax(gmax, c.bbox_max);
+            }
+
+            Lx = gmax.x - gmin.x;
+            Ly = gmax.y - gmin.y;
+            Lz = gmax.z - gmin.z;
+
+            dx = (Nx > 0) ? (Lx / Nx) : 0.0;
+            dy = (Ny > 0) ? (Ly / Ny) : 0.0;
+            dz = (Nz > 0) ? (Lz / Nz) : 0.0;
+        } else {
+            Lx = Ly = Lz = 0.0;
+            dx = dy = dz = 0.0;
+        }
+
+        // 7) 构建全局 face 几何与 cell-face 映射
+        buildGridFaces();
+
+        std::cout << "Corner-point grid initialized from CSV successfully." << std::endl;
+        std::cout << "Nx = " << Nx << ", Ny = " << Ny << ", Nz = " << Nz << std::endl;
+        std::cout << "Pillars = " << coord_max_i << " x " << coord_max_j << std::endl;
+        std::cout << "Cells = " << n_matrix << std::endl;
+
+        return true;
+    }
+
+    // =========================================================================
+    // 10.5 保留原 initGrid() 作为规则网格备用入口（可选）
+    // =========================================================================
+    void initGrid() {
+        n_matrix = Nx * Ny * Nz;
+        cells.resize(n_matrix);
+
+        for (int k = 0; k < Nz; ++k) {
+            for (int j = 0; j < Ny; ++j) {
+                for (int i = 0; i < Nx; ++i) {
+                    int id = k * Nx * Ny + j * Nx + i;
+
+                    Cell c;
+                    c.id = id;
+                    c.ix = i;
+                    c.iy = j;
+                    c.iz = k;
+
+                    // 规则网格的 8 个角点
+                    double x0 = i * dx;
+                    double x1 = (i + 1) * dx;
+                    double y0 = j * dy;
+                    double y1 = (j + 1) * dy;
+                    double z0 = k * dz;
+                    double z1 = (k + 1) * dz;
+
+                    c.corners[0] = {x0, y0, z0};
+                    c.corners[1] = {x1, y0, z0};
+                    c.corners[2] = {x1, y1, z0};
+                    c.corners[3] = {x0, y1, z0};
+                    c.corners[4] = {x0, y0, z1};
+                    c.corners[5] = {x1, y0, z1};
+                    c.corners[6] = {x1, y1, z1};
+                    c.corners[7] = {x0, y1, z1};
+
+                    c.phi = 0.04;
+                    c.K[0] = 0.005;
+                    c.K[1] = 0.005;
+                    c.K[2] = 0.005;
+
+                    computeCellDerivedGeometry(c);
+
+                    cells[id] = c;
+                }
+            }
+        }
+
+        buildGridFaces();
+
+        n_frac_nodes = 0;
+        n_total = n_matrix;
+    }
 
     void buildGridFaces() {
         faces.clear();
@@ -1369,68 +2005,15 @@ public:
         }
     }
 
+    void generateFractures(int total_fracs = 60,
+                           double min_L = 30.0, double max_L = 80.0,
+                           double max_dip = PI/3.0,
+                           double min_strike = 0.0, double max_strike = PI,
+                           double aperture_val = 0.01, double perm_val = 1000.0,
+                           double range_x_min = 0.0, double range_x_max = -1.0,
+                           double range_y_min = 0.0, double range_y_max = -1.0,
+                           double range_z_min = 0.0, double range_z_max = -1.0) {
 
-    void initGrid() {
-        n_matrix = Nx * Ny * Nz;
-        cells.resize(n_matrix);
-
-        for (int k = 0; k < Nz; ++k) {
-            for (int j = 0; j < Ny; ++j) {
-                for (int i = 0; i < Nx; ++i) {
-                    int id = k * Nx * Ny + j * Nx + i;
-
-                    Cell c;
-                    c.id = id;
-                    c.ix = i;
-                    c.iy = j;
-                    c.iz = k;
-
-                    // 先构造规则网格的 8 个角点
-                    double x0 = i * dx;
-                    double x1 = (i + 1) * dx;
-                    double y0 = j * dy;
-                    double y1 = (j + 1) * dy;
-                    double z0 = k * dz;
-                    double z1 = (k + 1) * dz;
-
-                    c.corners[0] = {x0, y0, z0};
-                    c.corners[1] = {x1, y0, z0};
-                    c.corners[2] = {x1, y1, z0};
-                    c.corners[3] = {x0, y1, z0};
-                    c.corners[4] = {x0, y0, z1};
-                    c.corners[5] = {x1, y0, z1};
-                    c.corners[6] = {x1, y1, z1};
-                    c.corners[7] = {x0, y1, z1};
-
-                    // 物性
-                    c.phi = 0.04;
-                    c.K[0] = 0.005;
-                    c.K[1] = 0.005;
-                    c.K[2] = 0.005;
-
-                    // 用 corners 反算几何量
-                    computeCellDerivedGeometry(c);
-
-                    cells[id] = c;
-                }
-            }
-        }
-
-        // 构建全局 face 几何与 cell-face 映射
-        buildGridFaces();
-    }
-
-
-
-    void generateFractures(int total_fracs = 60, 
-                       double min_L = 30.0, double max_L = 80.0, 
-                       double max_dip = PI/3.0, 
-                       double min_strike = 0.0, double max_strike = PI,
-                       double aperture_val = 0.01, double perm_val = 1000.0,
-                       double range_x_min = 0.0, double range_x_max = -1.0,
-                       double range_y_min = 0.0, double range_y_max = -1.0,
-                       double range_z_min = 0.0, double range_z_max = -1.0) {
-    
         double use_max_x = (range_x_max < 0) ? Lx : range_x_max;
         double use_max_y = (range_y_max < 0) ? Ly : range_y_max;
         double use_max_z = (range_z_max < 0) ? Lz : range_z_max;
@@ -1453,7 +2036,7 @@ public:
 
         auto fracVerticesInBox = [&](const Fracture& f) -> bool {
             return inBox(f.vertices[0]) && inBox(f.vertices[1]) &&
-                inBox(f.vertices[2]) && inBox(f.vertices[3]);
+                   inBox(f.vertices[2]) && inBox(f.vertices[3]);
         };
 
         for (int i = 0; i < total_fracs; ++i) {
@@ -1467,8 +2050,8 @@ public:
             while (true) {
                 if (++tries > 200000) {
                     std::cerr << "Failed to place natural fracture " << i
-                            << " fully inside domain. "
-                            << "Consider reducing distL/distDip or enlarging domain.\n";
+                              << " fully inside domain. "
+                              << "Consider reducing distL/distDip or enlarging domain.\n";
                     return;
                 }
 
@@ -1496,16 +2079,16 @@ public:
     }
 
     void generateHydraulicFractures(int total_fracs = 20,
-                                double well_length = 2000.0,
-                                double hf_len = 120.0,
-                                double hf_height = 40.0,
-                                double aperture_val = 0.01,
-                                double perm_val = 10000.0,
-                                double x_center = -1.0,
-                                double y_center = -1.0,
-                                double z_center = -1.0,
-                                int start_id = -1) {
-    
+                                    double well_length = 2000.0,
+                                    double hf_len = 120.0,
+                                    double hf_height = 30.0,
+                                    double aperture_val = 0.1,
+                                    double perm_val = 1000.0,
+                                    double x_center = -1.0,
+                                    double y_center = -1.0,
+                                    double z_center = -1.0,
+                                    int start_id = -1) {
+
         if (total_fracs <= 0) {
             std::cout << "No hydraulic fractures requested." << std::endl;
             return;
@@ -1545,8 +2128,10 @@ public:
         double spacing = 0.0;
         double x_start = xc;
         if (total_fracs > 1) {
-            x_start = xc - well_length / 2.0;
-            spacing = well_length / (total_fracs - 1);
+            double eps_x=0.1;
+            x_start = xc - well_length / 2.0 + eps_x;
+            double x_end = xc + well_length / 2.0 - eps_x;
+            spacing = (x_end - x_start) / (total_fracs - 1);
         }
 
         for (int k = 0; k < total_fracs; ++k) {
@@ -1568,14 +2153,17 @@ public:
         }
 
         std::cout << "Generated " << total_fracs << " hydraulic fractures. "
-                << "ID range: [" << base_id << ", " << (base_id + total_fracs - 1) << "]"
-                << std::endl;
+                  << "ID range: [" << base_id << ", " << (base_id + total_fracs - 1) << "]"
+                  << std::endl;
     }
-
 
     void processGeometry() {
         segments.clear();
         int seg_id_counter = 0;
+
+
+        const double MIN_SEG_AREA = 1;
+
 
         for (const auto& frac : fractures) {
             // 1. fracture 自身 bbox
@@ -1611,7 +2199,7 @@ public:
                 if (poly.size() < 3) continue;
 
                 double area = polygonArea(poly);
-                if (area <= 1e-6) continue;
+                if (area <= MIN_SEG_AREA) continue;
 
                 Segment seg;
                 seg.id = seg_id_counter++;
@@ -1624,10 +2212,10 @@ public:
                 seg.perm = frac.perm;
                 seg.poly = poly;
 
-                // 阶段C已重构：基于真实 FaceGeom 的局部 face-trace 几何
+                // 基于真实 FaceGeom 的局部 face-trace 几何
                 fillSegmentFaceGeom(seg, poly, cell, faces);
 
-                // 阶段D2：统一用一般六面体版 Tmf 计算
+                // 一般六面体版 Tmf 计算
                 seg.T_mf = computeMatrixFractureTransmissibility(cell, seg, 2, 2, 2);
 
                 segments.push_back(seg);
@@ -1639,9 +2227,6 @@ public:
         std::cout << "Generated " << n_frac_nodes << " fracture segments." << std::endl;
     }
 
-
-
-    // --- 优化点：构建连接时同时构建邻接表 ---
     void buildConnections() {
         connections.clear();
         adj.assign(n_total, std::vector<Neighbor>());
@@ -1655,7 +2240,7 @@ public:
         };
 
         // =========================================================
-        // 1. Matrix-Matrix —— face-based TPFA（阶段D1）
+        // 1. Matrix-Matrix —— face-based TPFA
         // =========================================================
         for (const auto& f : faces) {
             if (f.owner < 0 || f.neighbor < 0) continue;
@@ -1670,7 +2255,7 @@ public:
         }
 
         // =========================================================
-        // 2. Matrix-Fracture —— 继续使用阶段D2的 T_mf
+        // 2. Matrix-Fracture
         // =========================================================
         for (int s = 0; s < n_frac_nodes; ++s) {
             int u = segments[s].cell_id;
@@ -1679,9 +2264,7 @@ public:
         }
 
         // =========================================================
-        // 3. Fracture-Fracture (Intra) —— 阶段D3重写版
-        // 同一条大裂缝在相邻宿主 cell 中的两个 segment，
-        // 通过 shared global face id 来识别共享界面
+        // 3. Fracture-Fracture (Intra)
         // =========================================================
         std::map<int, std::vector<int>> frac_seg_map;
         for (int s = 0; s < n_frac_nodes; ++s) {
@@ -1705,7 +2288,6 @@ public:
                         continue;
                     }
 
-                    // 理论上共享面应是内部面
                     if (shared_fid < 0) continue;
                     const FaceGeom& fg = faces[shared_fid];
                     if (fg.owner < 0 || fg.neighbor < 0) continue;
@@ -1745,7 +2327,7 @@ public:
         }
 
         // =========================================================
-        // 4. Fracture-Fracture (Inter/Cross) —— 暂时保持现有逻辑
+        // 4. Fracture-Fracture (Inter/Cross)
         // =========================================================
         std::map<int, std::vector<int>> cell_seg_map;
         for (int s = 0; s < n_frac_nodes; ++s) {
@@ -1859,13 +2441,27 @@ public:
         }
 
         std::cout << "Setup " << wells.size() << " well connections." << std::endl;
-    }
+        std::map<int, int> seg_count_by_frac;
+        for (const auto& seg : segments) {
+            seg_count_by_frac[seg.frac_id]++;
+        }
 
-    // --- 物理计算辅助 ---
+        std::cout << "===== Segment count by hydraulic fracture =====" << std::endl;
+        for (const auto& f : fractures) {
+            if (f.is_hydraulic) {
+                std::cout << "Frac ID " << f.id
+                        << " : " << seg_count_by_frac[f.id] << " segments" << std::endl;
+            }
+        }
+    };
+
     void initState() {
-        states.resize(n_total); states_prev.resize(n_total);
-        for(int i=0; i<n_total; ++i) {
-            states[i].P = 800.0; states[i].Sw = 0.05; states[i].Sg = 0.9;
+        states.resize(n_total);
+        states_prev.resize(n_total);
+        for (int i = 0; i < n_total; ++i) {
+            states[i].P = 800.0;
+            states[i].Sw = 0.05;
+            states[i].Sg = 0.9;
             states_prev[i] = states[i];
         }
     }
@@ -1882,7 +2478,12 @@ public:
         return p;
     }
 
-    Eigen::Matrix<AD3, 3, 1> computeAccumulation_AD(double dt, const State& s_old_val, const StateAD3& s_new, const PropertiesT<AD3>& p_new, double vol, double phi) const {
+    Eigen::Matrix<AD3, 3, 1> computeAccumulation_AD(double dt,
+                                                    const State& s_old_val,
+                                                    const StateAD3& s_new,
+                                                    const PropertiesT<AD3>& p_new,
+                                                    double vol,
+                                                    double phi) const {
         StateAD3 s_old;
         s_old.P.value() = s_old_val.P;    s_old.P.derivatives().setZero();
         s_old.Sw.value() = s_old_val.Sw;  s_old.Sw.derivatives().setZero();
@@ -1895,14 +2496,18 @@ public:
         R(0) = accum * (s_new.Sw / p_new.Bw - s_old.Sw / p_old.Bw);
         R(1) = accum * ((AD3(1.0) - s_new.Sw - s_new.Sg) / p_new.Bo - (AD3(1.0) - s_old.Sw - s_old.Sg) / p_old.Bo);
         R(2) = accum * (s_new.Sg / p_new.Bg - s_old.Sg / p_old.Bg);
-        
+
         return R;
     }
 
-    Eigen::Matrix<AD3, 3, 1> computeWell_AD(const Well& w, const StateAD3& s_new, const PropertiesT<AD3>& pu) const {
+    Eigen::Matrix<AD3, 3, 1> computeWell_AD(const Well& w,
+                                            const StateAD3& s_new,
+                                            const PropertiesT<AD3>& pu) const {
         Eigen::Matrix<AD3, 3, 1> R;
-        R(0) = AD3(0.0); R(1) = AD3(0.0); R(2) = AD3(0.0);
-        
+        R(0) = AD3(0.0);
+        R(1) = AD3(0.0);
+        R(2) = AD3(0.0);
+
         AD3 dP = s_new.P - w.P_bhp;
         if (dP.value() > 0.0) {
             R(0) = w.WI * pu.lw * dP;
@@ -1918,13 +2523,17 @@ public:
         Eigen::Vector3d d_dv[3];
     };
 
-    FluxAD computeFlux_FastAD(double T_trans, const StateAD3& su, const StateAD3& sv, const PropertiesT<AD3>& pu, const PropertiesT<AD3>& pv) const {
+    FluxAD computeFlux_FastAD(double T_trans,
+                              const StateAD3& su,
+                              const StateAD3& sv,
+                              const PropertiesT<AD3>& pu,
+                              const PropertiesT<AD3>& pv) const {
         FluxAD res;
         double dP_val = su.P.value() - sv.P.value();
         bool u_is_upwind = (dP_val >= 0.0);
 
-        AD3 dP_u = su.P - sv.P.value(); 
-        AD3 dP_v = su.P.value() - sv.P; 
+        AD3 dP_u = su.P - sv.P.value();
+        AD3 dP_v = su.P.value() - sv.P;
 
         if (u_is_upwind) {
             AD3 Fu0 = T_trans * pu.lw * dP_u;
@@ -1959,23 +2568,23 @@ public:
         std::vector<Triplet<double>> trips;
         trips.reserve(n_total * 9 + connections.size() * 18);
 
-        for(int i=0; i<n_total; ++i) {
-            for(int eq=0; eq<3; ++eq) {
-                for(int var=0; var<3; ++var) {
+        for (int i = 0; i < n_total; ++i) {
+            for (int eq = 0; eq < 3; ++eq) {
+                for (int var = 0; var < 3; ++var) {
                     trips.emplace_back(3*i+eq, 3*i+var, 0.0);
                 }
             }
         }
-        for(const auto& conn : connections) {
+        for (const auto& conn : connections) {
             int u = conn.u, v = conn.v;
-            for(int eq=0; eq<3; ++eq) {
-                for(int var=0; var<3; ++var) {
+            for (int eq = 0; eq < 3; ++eq) {
+                for (int var = 0; var < 3; ++var) {
                     trips.emplace_back(3*u+eq, 3*v+var, 0.0);
                     trips.emplace_back(3*v+eq, 3*u+var, 0.0);
                 }
             }
         }
-        
+
         J.setFromTriplets(trips.begin(), trips.end());
         J.makeCompressed();
 
@@ -1989,20 +2598,20 @@ public:
         };
 
         cell_J_idx.resize(n_total);
-        for(int i=0; i<n_total; ++i) {
-            for(int eq=0; eq<3; ++eq) {
-                for(int var=0; var<3; ++var) {
+        for (int i = 0; i < n_total; ++i) {
+            for (int eq = 0; eq < 3; ++eq) {
+                for (int var = 0; var < 3; ++var) {
                     cell_J_idx[i].diag[eq][var] = get_val_idx(3*i+eq, 3*i+var);
                 }
             }
         }
 
         conn_J_idx.resize(connections.size());
-        for(size_t i=0; i<connections.size(); ++i) {
+        for (size_t i = 0; i < connections.size(); ++i) {
             int u = connections[i].u;
             int v = connections[i].v;
-            for(int eq=0; eq<3; ++eq) {
-                for(int var=0; var<3; ++var) {
+            for (int eq = 0; eq < 3; ++eq) {
+                for (int var = 0; var < 3; ++var) {
                     conn_J_idx[i].off_uv[eq][var] = get_val_idx(3*u+eq, 3*v+var);
                     conn_J_idx[i].off_vu[eq][var] = get_val_idx(3*v+eq, 3*u+var);
                 }
@@ -2011,42 +2620,36 @@ public:
         std::cout << "Jacobian static pattern built. Nonzeros: " << J.nonZeros() << std::endl;
     }
 
-    // =========================================================================
-    // 替换原有的 solveStep，现在返回 bool 表示是否收敛成功
-    // =========================================================================
     bool solveStep(double dt, double& step_oil, double& step_water, double& step_gas, int& iter_out) {
-        int max_iter = 15;      // 增加最大迭代次数
-        double tol = 1e-3;      // 稍微放宽一点容差，防止在数值噪音处死循环
-        
+        int max_iter = 15;
+        double tol = 1e-3;
+
         // 备份初始状态，以便迭代失败时恢复
         std::vector<State> states_backup = states;
-        
-        // 临时累积量，只有收敛才加到总量里
-        double curr_oil = 0, curr_water = 0, curr_gas = 0;
 
-        for(int iter=0; iter<max_iter; ++iter) {
-            iter_out = iter + 1; // [Modified: 记录当前迭代步数]
+        for (int iter = 0; iter < max_iter; ++iter) {
+            iter_out = iter + 1;
 
             std::fill(J.valuePtr(), J.valuePtr() + J.nonZeros(), 0.0);
             VectorXd Rg(3*n_total);
             Rg.setZero();
-            
+
             std::vector<StateAD3> states_ad(n_total);
             std::vector<PropertiesT<AD3>> props_ad(n_total);
 
             for (int i = 0; i < n_total; ++i) {
-                states_ad[i].P.value() = states[i].P;    states_ad[i].P.derivatives()  = Eigen::Vector3d::Unit(0);
+                states_ad[i].P.value()  = states[i].P;   states_ad[i].P.derivatives()  = Eigen::Vector3d::Unit(0);
                 states_ad[i].Sw.value() = states[i].Sw;  states_ad[i].Sw.derivatives() = Eigen::Vector3d::Unit(1);
                 states_ad[i].Sg.value() = states[i].Sg;  states_ad[i].Sg.derivatives() = Eigen::Vector3d::Unit(2);
                 props_ad[i] = getProps(states_ad[i]);
             }
 
-            for (int i=0; i<n_total; ++i) {
+            for (int i = 0; i < n_total; ++i) {
                 double vol = (i < n_matrix) ? cells[i].vol : (segments[i - n_matrix].area * segments[i - n_matrix].aperture);
                 double phi = (i < n_matrix) ? cells[i].phi : 1.0;
-                
+
                 auto R_acc = computeAccumulation_AD(dt, states_prev[i], states_ad[i], props_ad[i], vol, phi);
-                
+
                 if (well_map.count(i)) {
                     auto R_well = computeWell_AD(wells[well_map[i]], states_ad[i], props_ad[i]);
                     R_acc(0) += R_well(0);
@@ -2057,7 +2660,7 @@ public:
                 for (int eq = 0; eq < 3; ++eq) {
                     Rg(3*i + eq) += R_acc(eq).value();
                     Deriv3 derivs = R_acc(eq).derivatives();
-                    for(int var = 0; var < 3; ++var) {
+                    for (int var = 0; var < 3; ++var) {
                         J.valuePtr()[cell_J_idx[i].diag[eq][var]] += derivs(var);
                     }
                 }
@@ -2067,20 +2670,20 @@ public:
                 const auto& conn = connections[c_idx];
                 int u = conn.u;
                 int v = conn.v;
-                
+
                 auto F_uv = computeFlux_FastAD(conn.T, states_ad[u], states_ad[v], props_ad[u], props_ad[v]);
-                
+
                 for (int eq = 0; eq < 3; ++eq) {
                     Rg(3*u + eq) += F_uv.val[eq];
                     Rg(3*v + eq) -= F_uv.val[eq];
-                    
+
                     for (int var = 0; var < 3; ++var) {
                         double dF_dXu = F_uv.d_du[eq](var);
                         double dF_dXv = F_uv.d_dv[eq](var);
-                        
+
                         J.valuePtr()[cell_J_idx[u].diag[eq][var]] += dF_dXu;
                         J.valuePtr()[conn_J_idx[c_idx].off_vu[eq][var]] -= dF_dXu;
-                        
+
                         J.valuePtr()[conn_J_idx[c_idx].off_uv[eq][var]] += dF_dXv;
                         J.valuePtr()[cell_J_idx[v].diag[eq][var]] -= dF_dXv;
                     }
@@ -2089,19 +2692,19 @@ public:
 
             double max_resid = Rg.lpNorm<Infinity>();
 
-            if(max_resid < tol) {
+            if (max_resid < tol) {
                 // 收敛成功！计算本步产量
-                for(const auto& w : wells) {
+                for (const auto& w : wells) {
                     int u = w.target_node_idx;
                     double dP = states[u].P - w.P_bhp;
-                    if(dP > 0) {
+                    if (dP > 0) {
                         PropertiesT<double> p = getProps(states[u]);
                         step_water += w.WI * p.lw * dP * dt;
                         step_oil   += w.WI * p.lo * dP * dt;
                         step_gas   += w.WI * p.lg * dP * dt;
                     }
                 }
-                return true; // 成功
+                return true;
             }
 
             BiCGSTAB<SparseMatrix<double>, IncompleteLUT<double>> solver;
@@ -2109,77 +2712,84 @@ public:
             solver.preconditioner().setFillfactor(40);
             solver.setTolerance(1e-5);
             solver.setMaxIterations(500);
-            
+
             solver.compute(J);
             if (solver.info() != Success) {
-                states = states_backup; 
+                states = states_backup;
                 return false;
             }
-            
+
             VectorXd delta = solver.solve(-Rg);
-            
+
             if (solver.info() != Success) {
-                states = states_backup; 
+                states = states_backup;
                 return false;
             }
-            
-            // 5. 更新与阻尼 (Damping) - 关键修改！
-            // [Modified: 引入牛顿回溯 Line Search 以确保残差下降]
-            double alpha = 1.0; 
+
+            // 更新与阻尼
+            double alpha = 1.0;
             bool accepted = false;
             double norm_old = Rg.norm();
             std::vector<State> states_before_ls = states;
 
-            for(int ls = 0; ls < 3; ++ls) {
-                double damping = 1.0; 
+            for (int ls = 0; ls < 3; ++ls) {
+                double damping = 1.0;
                 double max_delta_P = 0;
                 double max_delta_S = 0;
-                for(int i=0; i<n_total; ++i) {
+                for (int i = 0; i < n_total; ++i) {
                     max_delta_P = std::max(max_delta_P, std::abs(delta(3*i+0) * alpha));
                     max_delta_S = std::max(max_delta_S, std::abs(delta(3*i+1) * alpha));
                     max_delta_S = std::max(max_delta_S, std::abs(delta(3*i+2) * alpha));
                 }
 
-                if(max_delta_P > 20.0) damping = std::min(damping, 20.0 / max_delta_P);
-                if(max_delta_S > 0.1)  damping = std::min(damping, 0.1 / max_delta_S);
+                if (max_delta_P > 20.0) damping = std::min(damping, 20.0 / max_delta_P);
+                if (max_delta_S > 0.1)  damping = std::min(damping, 0.1 / max_delta_S);
 
-                for(int i=0; i<n_total; ++i) {
+                for (int i = 0; i < n_total; ++i) {
                     states[i].P  = states_before_ls[i].P  + delta(3*i+0) * damping * alpha;
                     states[i].Sw = states_before_ls[i].Sw + delta(3*i+1) * damping * alpha;
                     states[i].Sg = states_before_ls[i].Sg + delta(3*i+2) * damping * alpha;
-                    states[i].P = std::max(1.0, states[i].P); 
+
+                    states[i].P  = std::max(1.0, states[i].P);
                     states[i].Sw = std::max(0.0, std::min(1.0, states[i].Sw));
                     states[i].Sg = std::max(0.0, std::min(1.0, states[i].Sg));
-                    if(states[i].Sw + states[i].Sg > 1.0) {
+
+                    if (states[i].Sw + states[i].Sg > 1.0) {
                         double sum = states[i].Sw + states[i].Sg;
-                        states[i].Sw /= sum; states[i].Sg /= sum;
+                        states[i].Sw /= sum;
+                        states[i].Sg /= sum;
                     }
                 }
 
-                double norm_new = 0;
+                double norm_new = 0.0;
                 std::vector<StateAD3> states_ad_ls(n_total);
                 std::vector<PropertiesT<AD3>> props_ad_ls(n_total);
-                for(int i=0; i<n_total; ++i) {
-                    states_ad_ls[i].P.value() = states[i].P;    states_ad_ls[i].P.derivatives().setZero();
+                for (int i = 0; i < n_total; ++i) {
+                    states_ad_ls[i].P.value()  = states[i].P;   states_ad_ls[i].P.derivatives().setZero();
                     states_ad_ls[i].Sw.value() = states[i].Sw;  states_ad_ls[i].Sw.derivatives().setZero();
                     states_ad_ls[i].Sg.value() = states[i].Sg;  states_ad_ls[i].Sg.derivatives().setZero();
                     props_ad_ls[i] = getProps(states_ad_ls[i]);
                 }
                 VectorXd Rg_ls(3*n_total);
                 Rg_ls.setZero();
+
                 for (int i = 0; i < n_total; ++i) {
                     double vol = (i < n_matrix) ? cells[i].vol : (segments[i - n_matrix].area * segments[i - n_matrix].aperture);
                     double phi = (i < n_matrix) ? cells[i].phi : 1.0;
                     auto R_acc = computeAccumulation_AD(dt, states_prev[i], states_ad_ls[i], props_ad_ls[i], vol, phi);
                     if (well_map.count(i)) {
                         auto R_well = computeWell_AD(wells[well_map[i]], states_ad_ls[i], props_ad_ls[i]);
-                        R_acc(0) += R_well(0); R_acc(1) += R_well(1); R_acc(2) += R_well(2);
+                        R_acc(0) += R_well(0);
+                        R_acc(1) += R_well(1);
+                        R_acc(2) += R_well(2);
                     }
                     for (int eq = 0; eq < 3; ++eq) Rg_ls(3*i + eq) += R_acc(eq).value();
                 }
+
                 for (size_t c_idx = 0; c_idx < connections.size(); ++c_idx) {
                     const auto& conn = connections[c_idx];
-                    int u = conn.u; int v = conn.v;
+                    int u = conn.u;
+                    int v = conn.v;
                     auto F_uv = computeFlux_FastAD(conn.T, states_ad_ls[u], states_ad_ls[v], props_ad_ls[u], props_ad_ls[v]);
                     for (int eq = 0; eq < 3; ++eq) {
                         Rg_ls(3*u + eq) += F_uv.val[eq];
@@ -2188,7 +2798,7 @@ public:
                 }
                 norm_new = Rg_ls.norm();
 
-                if(norm_new < norm_old || iter == 0) {
+                if (norm_new < norm_old || iter == 0) {
                     accepted = true;
                     break;
                 } else {
@@ -2197,29 +2807,26 @@ public:
                 }
             }
 
-            if(!accepted && iter > 0) {
+            if (!accepted && iter > 0) {
                 states = states_backup;
                 return false;
             }
         }
-        
+
         // 达到最大迭代次数仍未收敛
-        states = states_backup; // 恢复状态
+        states = states_backup;
         return false;
     }
 
-    // =========================================================================
-    // 新增功能：导出静态网格和裂缝几何信息，供 OpenCV 可视化使用
-    // =========================================================================
     void exportStaticGeometry() {
         // 1. 保留旧版网格基础信息，兼容现有脚本
         std::ofstream gridFile("grid_info.csv");
         gridFile << Nx << "," << Ny << "," << Nz << ","
-                << Lx << "," << Ly << "," << Lz << ","
-                << dx << "," << dy << "," << dz << "\n";
+                 << Lx << "," << Ly << "," << Lz << ","
+                 << dx << "," << dy << "," << dz << "\n";
         gridFile.close();
 
-        // 2. 新增：导出 cell 几何
+        // 2. 导出 cell 几何
         std::ofstream cellFile("cell_geometry.csv");
         cellFile
             << "cell_id,ix,iy,iz,"
@@ -2251,7 +2858,7 @@ public:
         }
         cellFile.close();
 
-        // 3. 新增：导出 face 几何
+        // 3. 导出 face 几何
         std::ofstream faceFile("face_geometry.csv");
         faceFile
             << "face_id,owner,neighbor,local_owner_face,local_neighbor_face,"
@@ -2281,16 +2888,16 @@ public:
         }
         faceFile.close();
 
-        // 4. 保留旧版裂缝几何导出
+        // 4. 裂缝几何导出
         std::ofstream fracFile("fracture_geometry.csv");
         fracFile << "id,x0,y0,z0,x1,y1,z1,x2,y2,z2,x3,y3,z3\n";
         for (const auto& f : fractures) {
             fracFile << f.id;
             for (int i = 0; i < 4; ++i) {
                 fracFile << ","
-                        << f.vertices[i].x << ","
-                        << f.vertices[i].y << ","
-                        << f.vertices[i].z;
+                         << f.vertices[i].x << ","
+                         << f.vertices[i].y << ","
+                         << f.vertices[i].z;
             }
             fracFile << "\n";
         }
@@ -2299,32 +2906,29 @@ public:
         std::cout << "Geometry exported: grid_info.csv, cell_geometry.csv, face_geometry.csv, fracture_geometry.csv" << std::endl;
     }
 
-    // 导出井信息 (well_info.csv)
     void exportWells() {
         std::ofstream wellFile("well_info.csv");
         // 输出格式: ID, 节点索引, 类型(基质/裂缝), X, Y, Z, 井指数,井底流压
         wellFile << "well_id,node_idx,type,x,y,z,WI,P_bhp\n";
-        
-        for(size_t i=0; i<wells.size(); ++i) {
+
+        for (size_t i = 0; i < wells.size(); ++i) {
             int u = wells[i].target_node_idx;
             double x, y, z;
             std::string type;
 
             if (u < n_matrix) {
-                // 如果井在基质网格中
                 x = cells[u].center.x;
                 y = cells[u].center.y;
                 z = cells[u].center.z;
                 type = "Matrix";
             } else {
-                // 如果井在裂缝段中 (你的代码主要是这种情况)
                 int seg_idx = u - n_matrix;
                 x = segments[seg_idx].center.x;
                 y = segments[seg_idx].center.y;
                 z = segments[seg_idx].center.z;
                 type = "Fracture";
             }
-            
+
             wellFile << i << "," << u << "," << type << ","
                      << x << "," << y << "," << z << ","
                      << wells[i].WI << "," << wells[i].P_bhp << "\n";
@@ -2333,89 +2937,88 @@ public:
         std::cout << "Wells exported: well_info.csv" << std::endl;
     }
 
-    // =========================================================================
-    // 替换原有的 run，实现自动时间步长控制 (Auto Time-Stepping)
-    // =========================================================================
     void run(double total_time_days) {
         std::ofstream file("output_sim.csv");
         file << "Time,CumOil,CumWater,CumGas,AvgPressure,DT\n";
 
         double current_time = 0.0;
-        double dt = 0.001; // 初始步长设得非常小！ (1e-3 天)
+        double dt = 0.001;
         double dt_min = 1e-6;
         double dt_max = 10.0;
-        
-        // [Modified: 设定工业级目标迭代次数]
-        int target_iter = 6; 
-        double tot_oil=0, tot_water=0, tot_gas=0;
+
+        int target_iter = 6;
+        double tot_oil = 0, tot_water = 0, tot_gas = 0;
         int step_count = 0;
 
         std::cout << std::fixed << std::setprecision(4);
 
-        while(current_time < total_time_days) {
+        while (current_time < total_time_days) {
             step_count++;
-            
+
             // 尝试求解一步
-            double step_oil=0, step_water=0, step_gas=0;
+            double step_oil = 0, step_water = 0, step_gas = 0;
             bool success = false;
-            int actual_iter = 0; // [Modified: 接收实际迭代次数]
+            int actual_iter = 0;
 
             // 如果这一步加上去超过总时间，就截断 dt
-            if(current_time + dt > total_time_days) {
+            if (current_time + dt > total_time_days) {
                 dt = total_time_days - current_time;
             }
 
             // 重试循环
-            while(!success) {
-                if(dt < dt_min) {
+            while (!success) {
+                if (dt < dt_min) {
                     std::cerr << "Time step too small, simulation failed." << std::endl;
                     return;
                 }
 
-                std::cout << "Step " << step_count << " @ T=" << current_time 
+                std::cout << "Step " << step_count << " @ T=" << current_time
                           << " trying dt=" << dt << " ... " << std::flush;
-                
-                // [Modified: 传入 actual_iter]
+
                 success = solveStep(dt, step_oil, step_water, step_gas, actual_iter);
 
-                if(success) {
+                if (success) {
                     std::cout << "Converged in " << actual_iter << " iters." << std::endl;
-                    // 更新时间
                     current_time += dt;
-                    states_prev = states; // 归档历史状态
-                    
+                    states_prev = states;
+
                     // 累加产量
                     tot_oil += step_oil;
                     tot_water += step_water;
                     tot_gas += step_gas;
 
                     // 写入日志
-                    double avgP = 0;
-                    for(int i=0; i<n_matrix; ++i) avgP += states[i].P;
+                    double avgP = 0.0;
+                    for (int i = 0; i < n_matrix; ++i) avgP += states[i].P;
                     avgP /= n_matrix;
+
                     file << current_time << "," << tot_oil << "," << tot_water << "," << tot_gas << "," << avgP << "," << dt << "\n";
                     file.flush();
 
-                    // [Modified: 基于迭代目标的平滑步长调整逻辑]
+                    // 基于迭代目标的平滑步长调整逻辑
                     double fac = std::pow((double)target_iter / (double)std::max(1, actual_iter), 0.5);
-                    fac = std::max(0.5, std::min(1.5, fac)); // 限制单步缩放比例
+                    fac = std::max(0.5, std::min(1.5, fac));
                     dt = std::min(dt_max, dt * fac);
                 } else {
                     std::cout << "Failed. Cutting timestep." << std::endl;
-                    // 失败，减小步长重试
-                    dt *= 0.25; // [Modified: 失败时更果断地切步长]
+                    dt *= 0.25;
                 }
             }
         }
-        
+
         file.close();
-        
+
         // 输出场
         std::ofstream field("final_field.csv");
         field << "cell_id,x,y,z,P,Sw,Sg\n";
-        for(int i=0; i<n_matrix; ++i) {
-            field << i << ","<< cells[i].center.x << "," << cells[i].center.y << "," << cells[i].center.z << ","
-                  << states[i].P << "," << states[i].Sw << "," << states[i].Sg << "\n";
+        for (int i = 0; i < n_matrix; ++i) {
+            field << i << ","
+                  << cells[i].center.x << ","
+                  << cells[i].center.y << ","
+                  << cells[i].center.z << ","
+                  << states[i].P << ","
+                  << states[i].Sw << ","
+                  << states[i].Sg << "\n";
         }
         field.close();
     }
@@ -2423,43 +3026,44 @@ public:
 
 int main() {
     Simulator sim;
-    
-    // 1. 初始化网格
-    std::cout << "Initializing Grid..." << std::endl;
-    sim.initGrid();
-    
+
+    // 1. 从 COORD.csv + ZCORN.csv 初始化角点网格
+    std::cout << "Initializing Corner-Point Grid from CSV..." << std::endl;
+    if (!sim.initGridFromCornerPointCSV("COORD.csv", "ZCORN.csv")) {
+        std::cerr << "Failed to initialize corner-point grid from CSV." << std::endl;
+        return 1;
+    }
+
     // 2. 生成裂缝
     std::cout << "Generating Fractures..." << std::endl;
     sim.generateFractures();
     sim.generateHydraulicFractures();
-    
+
     // 3. 计算几何相交 (EDFM)
     std::cout << "Processing Geometry..." << std::endl;
     sim.processGeometry();
-    
+
     // 4. 建立连接关系 (Transmissibility)
     std::cout << "Building Connections..." << std::endl;
     sim.buildConnections();
-    
+
     // 5. 建立井
     std::cout << "Setting up Wells..." << std::endl;
     sim.setupWells();
     sim.exportWells();
-    
+
     // 6. 初始化状态
     sim.initState();
     sim.buildJacobianPattern();
 
-    // --- 【在这里添加调用】 ---
+    // 7. 导出几何
     std::cout << "Exporting Geometry for Visualization..." << std::endl;
-    sim.exportStaticGeometry(); 
-    // -----------------------
-    
-    // 7. 运行模拟
-    // 100 天，步长 10 天
+    sim.exportStaticGeometry();
+
+    // 8. 运行模拟
     std::cout << "Starting Simulation..." << std::endl;
-    sim.run(100.0); 
-    
+    sim.run(100.0);
+
     std::cout << "Done. Results saved to CSV." << std::endl;
     return 0;
 }
