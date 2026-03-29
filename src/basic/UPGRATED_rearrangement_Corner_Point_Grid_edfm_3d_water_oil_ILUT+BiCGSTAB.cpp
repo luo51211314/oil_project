@@ -2078,11 +2078,11 @@ public:
         }
     }
 
-    void generateHydraulicFractures(int total_fracs = 10,
-                                    double well_length = 800.0,
-                                    double hf_len = 50.0,
-                                    double hf_height = 40.0,
-                                    double aperture_val = 0.01,
+    void generateHydraulicFractures(int total_fracs = 20,
+                                    double well_length = 2000.0,
+                                    double hf_len = 120.0,
+                                    double hf_height = 30.0,
+                                    double aperture_val = 0.1,
                                     double perm_val = 1000.0,
                                     double x_center = -1.0,
                                     double y_center = -1.0,
@@ -2128,8 +2128,10 @@ public:
         double spacing = 0.0;
         double x_start = xc;
         if (total_fracs > 1) {
-            x_start = xc - well_length / 2.0;
-            spacing = well_length / (total_fracs - 1);
+            double eps_x=0.1;
+            x_start = xc - well_length / 2.0 + eps_x;
+            double x_end = xc + well_length / 2.0 - eps_x;
+            spacing = (x_end - x_start) / (total_fracs - 1);
         }
 
         for (int k = 0; k < total_fracs; ++k) {
@@ -2158,6 +2160,10 @@ public:
     void processGeometry() {
         segments.clear();
         int seg_id_counter = 0;
+
+
+        const double MIN_SEG_AREA = 1;
+
 
         for (const auto& frac : fractures) {
             // 1. fracture 自身 bbox
@@ -2193,7 +2199,7 @@ public:
                 if (poly.size() < 3) continue;
 
                 double area = polygonArea(poly);
-                if (area <= 1e-6) continue;
+                if (area <= MIN_SEG_AREA) continue;
 
                 Segment seg;
                 seg.id = seg_id_counter++;
@@ -2425,7 +2431,7 @@ public:
                 Well w;
                 w.target_node_idx = n_matrix + best_s;
                 w.WI = 2.0 * PI * kf * b / denom;
-                w.P_bhp = 700.0;
+                w.P_bhp = 50.0;
 
                 if (!std::isfinite(w.WI) || w.WI <= EPSILON) continue;
 

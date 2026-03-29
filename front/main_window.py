@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QStatusBar, QTabWidget, QStackedWidget, QTextEdit, QGroupBox,
                              QTableWidget, QSpinBox, QDoubleSpinBox, QGridLayout, QComboBox,
                              QProgressBar, QScrollArea, QFileDialog, QDialog, QDialogButtonBox,
-                             QCheckBox, QTableWidgetItem)
+                             QCheckBox, QTableWidgetItem, QLineEdit)
 from PyQt5.QtCore import Qt, QSize, QProcess, QTimer
 from PyQt5.QtGui import QIcon, QFont, QColor, QPixmap, QPainter
 from vtk.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
@@ -1254,28 +1254,105 @@ class MainWindow(QMainWindow):
         file_group.setStyleSheet(self.groupbox_style())
         file_layout = QVBoxLayout()
 
-        self.corner_grid_file_path = ""
-        self.corner_import_csv_btn = QPushButton("导入 CSV 文件")
-        self.corner_import_csv_btn.setStyleSheet("""
+        self.corner_coord_file_path = ""
+        self.corner_zcorn_file_path = ""
+
+        coord_layout = QHBoxLayout()
+        coord_label = QLabel("COORD:")
+        coord_label.setFixedWidth(60)
+        coord_label.setStyleSheet("color: #cccccc;")
+        self.corner_coord_file_label = QLabel("未选择")
+        self.corner_coord_file_label.setStyleSheet("color: #8f8f8f;")
+        self.corner_coord_file_label.setWordWrap(True)
+        coord_btn = QPushButton("浏览...")
+        coord_btn.setFixedWidth(50)
+        coord_btn.setStyleSheet("""
             QPushButton {
                 background-color: #3d3d3d;
                 color: #cccccc;
                 border: 1px solid #555555;
                 border-radius: 3px;
-                padding: 6px 10px;
+                padding: 3px 6px;
             }
             QPushButton:hover {
                 background-color: #4d4d4d;
             }
         """)
-        self.corner_import_csv_btn.clicked.connect(self.select_corner_grid_csv_file)
+        coord_btn.clicked.connect(lambda: self.select_corner_grid_csv_file("coord"))
+        coord_layout.addWidget(coord_label)
+        coord_layout.addWidget(self.corner_coord_file_label, 1)
+        coord_layout.addWidget(coord_btn)
+        file_layout.addLayout(coord_layout)
 
-        self.corner_grid_file_name_label = QLabel("未选择文件")
-        self.corner_grid_file_name_label.setWordWrap(True)
-        self.corner_grid_file_name_label.setStyleSheet("color: #8f8f8f; padding: 4px 0;")
+        zcorn_layout = QHBoxLayout()
+        zcorn_label = QLabel("ZCORN:")
+        zcorn_label.setFixedWidth(60)
+        zcorn_label.setStyleSheet("color: #cccccc;")
+        self.corner_zcorn_file_label = QLabel("未选择")
+        self.corner_zcorn_file_label.setStyleSheet("color: #8f8f8f;")
+        self.corner_zcorn_file_label.setWordWrap(True)
+        zcorn_btn = QPushButton("浏览...")
+        zcorn_btn.setFixedWidth(50)
+        zcorn_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3d3d3d;
+                color: #cccccc;
+                border: 1px solid #555555;
+                border-radius: 3px;
+                padding: 3px 6px;
+            }
+            QPushButton:hover {
+                background-color: #4d4d4d;
+            }
+        """)
+        zcorn_btn.clicked.connect(lambda: self.select_corner_grid_csv_file("zcorn"))
+        zcorn_layout.addWidget(zcorn_label)
+        zcorn_layout.addWidget(self.corner_zcorn_file_label, 1)
+        zcorn_layout.addWidget(zcorn_btn)
+        file_layout.addLayout(zcorn_layout)
 
-        file_layout.addWidget(self.corner_import_csv_btn)
-        file_layout.addWidget(self.corner_grid_file_name_label)
+        btn_layout = QHBoxLayout()
+        
+        draw_btn = QPushButton("绘制")
+        draw_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                border-radius: 3px;
+                padding: 8px 16px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+            QPushButton:disabled {
+                background-color: #555555;
+                color: #888888;
+            }
+        """)
+        draw_btn.clicked.connect(self.draw_corner_grid_from_csv)
+        btn_layout.addWidget(draw_btn)
+        
+        reset_view_btn = QPushButton("复原视角")
+        reset_view_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                border: none;
+                border-radius: 3px;
+                padding: 8px 16px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+        """)
+        reset_view_btn.clicked.connect(self.reset_corner_grid_view)
+        btn_layout.addWidget(reset_view_btn)
+        
+        file_layout.addLayout(btn_layout)
+
         file_group.setLayout(file_layout)
         layout.addWidget(file_group)
 
@@ -1326,19 +1403,78 @@ class MainWindow(QMainWindow):
         group.setLayout(layout)
         return group
 
-    def select_corner_grid_csv_file(self):
-        """为 Corner Grid 选择 CSV 输入文件，仅更新界面显示。"""
+    def select_corner_grid_csv_file(self, file_type):
+        """为 Corner Grid 选择 CSV 输入文件
+        
+        Args:
+            file_type: 'coord' 或 'zcorn'
+        """
         file_path, _ = QFileDialog.getOpenFileName(
             self,
-            "选择 Corner Grid CSV 文件",
+            f"选择 {file_type.upper()} CSV 文件",
             "",
             "CSV Files (*.csv);;All Files (*)",
         )
         if not file_path:
             return
 
-        self.corner_grid_file_path = file_path
-        self.corner_grid_file_name_label.setText(os.path.basename(file_path))
+        if file_type == "coord":
+            self.corner_coord_file_path = file_path
+            self.corner_coord_file_label.setText(os.path.basename(file_path))
+        else:
+            self.corner_zcorn_file_path = file_path
+            self.corner_zcorn_file_label.setText(os.path.basename(file_path))
+
+    def draw_corner_grid_from_csv(self):
+        """从CSV文件绘制角点网格"""
+        from .data_models import load_corner_point_grid_from_csv
+
+        if not self.corner_coord_file_path or not self.corner_zcorn_file_path:
+            self.status_bar.showMessage("请先选择COORD和ZCORN文件")
+            return
+
+        self.clear_cache()
+        self.status_bar.showMessage("Loading corner point grid from CSV...")
+        self.clear_sim_status()
+
+        self.append_sim_status("=" * 50)
+        self.append_sim_status("  Corner Point Grid CSV Loading...")
+        self.append_sim_status("=" * 50)
+        self.append_sim_status(f"COORD file: {os.path.basename(self.corner_coord_file_path)}")
+        self.append_sim_status(f"ZCORN file: {os.path.basename(self.corner_zcorn_file_path)}")
+
+        try:
+            cpg = load_corner_point_grid_from_csv(self.corner_coord_file_path, self.corner_zcorn_file_path)
+
+            self.sim_data.corner_point_grid = cpg
+            self.sim_data.grid_info = {
+                'nx': cpg.nx, 'ny': cpg.ny, 'nz': cpg.nz,
+                'Lx': cpg.lx, 'Ly': cpg.ly, 'Lz': cpg.lz
+            }
+
+            self.append_sim_status(f"Loaded {len(cpg.cells)} cells")
+            self.append_sim_status(f"Grid dimensions: {cpg.nx}x{cpg.ny}x{cpg.nz}")
+            self.append_sim_status(f"Pressure range: {cpg.min_pressure:.2f} - {cpg.max_pressure:.2f} bar")
+            self.append_sim_status("")
+            self.append_sim_status("=" * 50)
+            self.append_sim_status("  Data Loaded Successfully!")
+            self.append_sim_status("=" * 50)
+
+            self.vtk_renderer.render_corner_point_grid(self.sim_data)
+            self.update_corner_grid_statistics()
+
+            self.status_bar.showMessage("Corner Point Grid loaded from CSV")
+
+        except Exception as e:
+            self.append_sim_status(f"Error loading CSV files: {str(e)}")
+            self.status_bar.showMessage("Error loading CSV files")
+
+    def reset_corner_grid_view(self):
+        """复原角点网格视角"""
+        if self.sim_data.corner_point_grid and self.sim_data.corner_point_grid.cells:
+            self.vtk_renderer.setup_camera_for_corner_grid(self.sim_data.corner_point_grid)
+            self.vtk_renderer.vtk_widget.iren.Render()
+            self.status_bar.showMessage("View reset")
 
     def register_results_controls(self, algorithm_key, view_mode_combo, combo_field,
                                   check_show_grid, check_show_fractures):
@@ -1698,15 +1834,136 @@ class MainWindow(QMainWindow):
         self.sim_process.start()
     
     def run_corner_point_grid_simulation(self):
-        """运行角点网格模拟（使用模拟数据）"""
+        """运行角点网格模拟"""
         self.clear_cache()
-        self.status_bar.showMessage("Running Corner Point Grid simulation...")
+        self.status_bar.showMessage("Corner Point Grid simulation...")
         self.clear_sim_status()
         
         self.append_sim_status("=" * 50)
         self.append_sim_status("  Corner Point Grid Simulation Starting...")
         self.append_sim_status("=" * 50)
         
+        dialog = QDialog(self)
+        dialog.setWindowTitle("角点网格数据源")
+        dialog.setFixedSize(450, 250)
+        layout = QVBoxLayout(dialog)
+        
+        label = QLabel("请选择角点网格数据来源:")
+        layout.addWidget(label)
+        
+        coord_layout = QHBoxLayout()
+        coord_label = QLabel("COORD文件:")
+        coord_label.setFixedWidth(80)
+        self.coord_path_edit = QLineEdit()
+        self.coord_path_edit.setReadOnly(True)
+        self.coord_path_edit.setPlaceholderText("未选择")
+        coord_btn = QPushButton("浏览...")
+        coord_btn.setFixedWidth(60)
+        coord_btn.clicked.connect(lambda: self._browse_csv_file(self.coord_path_edit, "COORD"))
+        coord_layout.addWidget(coord_label)
+        coord_layout.addWidget(self.coord_path_edit)
+        coord_layout.addWidget(coord_btn)
+        layout.addLayout(coord_layout)
+        
+        zcorn_layout = QHBoxLayout()
+        zcorn_label = QLabel("ZCORN文件:")
+        zcorn_label.setFixedWidth(80)
+        self.zcorn_path_edit = QLineEdit()
+        self.zcorn_path_edit.setReadOnly(True)
+        self.zcorn_path_edit.setPlaceholderText("未选择")
+        zcorn_btn = QPushButton("浏览...")
+        zcorn_btn.setFixedWidth(60)
+        zcorn_btn.clicked.connect(lambda: self._browse_csv_file(self.zcorn_path_edit, "ZCORN"))
+        zcorn_layout.addWidget(zcorn_label)
+        zcorn_layout.addWidget(self.zcorn_path_edit)
+        zcorn_layout.addWidget(zcorn_btn)
+        layout.addLayout(zcorn_layout)
+        
+        btn_layout = QHBoxLayout()
+        btn_draw = QPushButton("绘制")
+        btn_mock = QPushButton("使用模拟数据")
+        btn_cancel = QPushButton("取消")
+        btn_layout.addWidget(btn_draw)
+        btn_layout.addWidget(btn_mock)
+        btn_layout.addWidget(btn_cancel)
+        layout.addLayout(btn_layout)
+        
+        result = [None]
+        
+        def on_draw():
+            coord_path = self.coord_path_edit.text()
+            zcorn_path = self.zcorn_path_edit.text()
+            if coord_path and zcorn_path:
+                result[0] = ('csv', coord_path, zcorn_path)
+                dialog.accept()
+            else:
+                self.status_bar.showMessage("请先选择COORD和ZCORN文件")
+        
+        def on_mock():
+            result[0] = ('mock', None, None)
+            dialog.accept()
+        
+        def on_cancel():
+            dialog.reject()
+        
+        btn_draw.clicked.connect(on_draw)
+        btn_mock.clicked.connect(on_mock)
+        btn_cancel.clicked.connect(on_cancel)
+        
+        if dialog.exec_() != QDialog.Accepted or result[0] is None:
+            self.append_sim_status("Simulation cancelled.")
+            self.status_bar.showMessage("Simulation cancelled")
+            return
+        
+        if result[0][0] == 'csv':
+            self.load_corner_point_grid_from_csv_files(result[0][1], result[0][2])
+        else:
+            self.run_corner_point_grid_mock_simulation()
+    
+    def _browse_csv_file(self, line_edit, file_type):
+        """浏览选择CSV文件"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, f"选择{file_type}文件", self.project_root, "CSV Files (*.csv);;All Files (*)"
+        )
+        if file_path:
+            line_edit.setText(file_path)
+    
+    def load_corner_point_grid_from_csv_files(self, coord_path, zcorn_path):
+        """从CSV文件加载角点网格数据"""
+        from .data_models import load_corner_point_grid_from_csv
+        
+        self.append_sim_status(f"COORD file: {os.path.basename(coord_path)}")
+        self.append_sim_status(f"ZCORN file: {os.path.basename(zcorn_path)}")
+        self.append_sim_status("Loading corner point grid data...")
+        
+        try:
+            cpg = load_corner_point_grid_from_csv(coord_path, zcorn_path)
+            
+            self.sim_data.corner_point_grid = cpg
+            self.sim_data.grid_info = {
+                'nx': cpg.nx, 'ny': cpg.ny, 'nz': cpg.nz,
+                'Lx': cpg.lx, 'Ly': cpg.ly, 'Lz': cpg.lz
+            }
+            
+            self.append_sim_status(f"Loaded {len(cpg.cells)} cells")
+            self.append_sim_status(f"Grid dimensions: {cpg.nx}x{cpg.ny}x{cpg.nz}")
+            self.append_sim_status(f"Pressure range: {cpg.min_pressure:.2f} - {cpg.max_pressure:.2f} bar")
+            self.append_sim_status("")
+            self.append_sim_status("=" * 50)
+            self.append_sim_status("  Data Loaded Successfully!")
+            self.append_sim_status("=" * 50)
+            
+            self.vtk_renderer.render_corner_point_grid(self.sim_data)
+            self.update_corner_grid_statistics()
+            
+            self.status_bar.showMessage("Corner Point Grid loaded from CSV")
+            
+        except Exception as e:
+            self.append_sim_status(f"Error loading CSV files: {str(e)}")
+            self.status_bar.showMessage("Error loading CSV files")
+    
+    def run_corner_point_grid_mock_simulation(self):
+        """运行角点网格模拟（使用模拟数据）"""
         params = self.collect_simulation_params()
         nx = params.get('nx', 20)
         ny = params.get('ny', 10)
