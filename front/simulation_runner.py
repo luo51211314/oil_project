@@ -23,7 +23,7 @@ MODULE_SEARCH_DIRS = [
 ]
 for module_dir in MODULE_SEARCH_DIRS:
     if os.path.isdir(module_dir) and module_dir not in sys.path:
-        sys.path.insert(0, module_dir)
+        sys.path.append(module_dir)
 
 _BLACK_OIL_MODULE = None
 _BLACK_OIL_IMPORT_ERROR = None
@@ -212,7 +212,7 @@ def run_corner_edfm_simulation(params):
         raise ValueError("Corner EDFM requires both COORD and ZCORN files")
 
     sim = edfm_core_corner.EDFMSimulator()
-    sim.setGridFiles(coord_file, zcorn_file)
+    sim.setCornerPointFiles(coord_file, zcorn_file)
     sim.setFractureParameters(
         int(params.get('num_fracs', 0)),
         float(params.get('min_len', 30.0)),
@@ -236,7 +236,7 @@ def run_corner_edfm_simulation(params):
     )
     sim.setWellParameters(
         float(params.get('well_radius', 0.05)),
-        float(params.get('well_pressure', 700.0)),
+        float(params.get('well_pressure', 50.0)),
     )
     sim.setSimulationParameters(float(params.get('simulation_time', 100.0)))
 

@@ -25,9 +25,13 @@
 #include <Eigen/SparseLU>
 #include <Eigen/IterativeLinearSolvers>
 #include <unsupported/Eigen/AutoDiff>
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+#include <pybind11/numpy.h>
 
 using namespace std;
 using namespace Eigen;
+namespace py = pybind11;
 
 // =============================================================================
 // 1. 常量与基础数据结构
@@ -155,7 +159,7 @@ bool parseDoubleStrict(const std::string& s, double& v) {
 
 bool isTopMarker(const std::string& s) {
     std::string t = trim(s);
-    if (t == "顶") return true;
+    if (t == u8"\u9876") return true;
 
     std::string low = t;
     for (char& ch : low) ch = (char)std::tolower((unsigned char)ch);
@@ -164,7 +168,7 @@ bool isTopMarker(const std::string& s) {
 
 bool isBottomMarker(const std::string& s) {
     std::string t = trim(s);
-    if (t == "底") return true;
+    if (t == u8"\u5e95") return true;
 
     std::string low = t;
     for (char& ch : low) ch = (char)std::tolower((unsigned char)ch);
@@ -309,6 +313,14 @@ struct PropertiesT {
     T Bw, Bo, Bg;
     T krw, kro, krg;
     T lw, lo, lg;
+};
+
+struct SimulationResult {
+    py::array_t<double> pressure_field;
+    py::array_t<double> temperature_field;
+    py::array_t<double> stress_field;
+    py::array_t<double> fracture_vertices;
+    py::array_t<int> fracture_cells;
 };
 
 // =============================================================================
@@ -1376,6 +1388,141 @@ public:
         n_total = 0;
     }
 
+    void setCornerPointFiles(const std::string& coord_file,
+                             const std::string& zcorn_file) {
+        coord_file_ = coord_file;
+        zcorn_file_ = zcorn_file;
+    }
+
+    void setFractureParameters(int total_fracs,
+                               double min_L,
+                               double max_L,
+                               double max_dip,
+                               double min_strike,
+                               double max_strike,
+                               double aperture_val,
+                               double perm_val) {
+        natural_total_fracs_ = total_fracs;
+        natural_min_L_ = min_L;
+        natural_max_L_ = max_L;
+        natural_max_dip_ = max_dip;
+        natural_min_strike_ = min_strike;
+        natural_max_strike_ = max_strike;
+        natural_aperture_ = aperture_val;
+        natural_perm_ = perm_val;
+    }
+
+    void setHydraulicFractureParameters(int total_fracs,
+                                        double well_length,
+                                        double hf_len,
+                                        double hf_height,
+                                        double aperture_val,
+                                        double perm_val,
+                                        double x_center = -1.0,
+                                        double y_center = -1.0,
+                                        double z_center = -1.0) {
+        hydraulic_total_fracs_ = total_fracs;
+        hydraulic_well_length_ = well_length;
+        hydraulic_hf_len_ = hf_len;
+        hydraulic_hf_height_ = hf_height;
+        hydraulic_aperture_ = aperture_val;
+        hydraulic_perm_ = perm_val;
+        hydraulic_x_center_ = x_center;
+        hydraulic_y_center_ = y_center;
+        hydraulic_z_center_ = z_center;
+    }
+
+    void setSimulationParameters(double total_time_days) {
+        total_time_days_ = total_time_days;
+    }
+
+    void setWellParameters(double well_radius, double well_pressure) {
+        well_radius_ = well_radius;
+        well_pressure_ = well_pressure;
+    }
+
+    py::array_t<double> getPressureData() const {
+        py::array_t<double> result(std::vector<py::ssize_t>{static_cast<py::ssize_t>(n_matrix), 4});
+        auto r = result.mutable_unchecked<2>();
+        for (int i = 0; i < n_matrix; ++i) {
+            r(i, 0) = cells[i].center.x;
+            r(i, 1) = cells[i].center.y;
+            r(i, 2) = cells[i].center.z;
+            r(i, 3) = states[i].P;
+        }
+        return result;
+    }
+
+    py::array_t<double> getFractureVertices() const {
+        py::array_t<double> result(std::vector<py::ssize_t>{static_cast<py::ssize_t>(fractures.size()) * 4, 4});
+        auto r = result.mutable_unchecked<2>();
+        py::ssize_t row = 0;
+        for (const auto& f : fractures) {
+            for (int i = 0; i < 4; ++i) {
+                r(row, 0) = f.vertices[i].x;
+                r(row, 1) = f.vertices[i].y;
+                r(row, 2) = f.vertices[i].z;
+                r(row, 3) = static_cast<double>(f.id);
+                ++row;
+            }
+        }
+        return result;
+    }
+
+    SimulationResult runSimulation() {
+        if (coord_file_.empty() || zcorn_file_.empty()) {
+            throw std::runtime_error("Corner-point input files are not set. Call setCornerPointFiles(coord, zcorn) first.");
+        }
+
+        std::cout << "Initializing Corner-Point Grid from CSV..." << std::endl;
+        if (!initGridFromCornerPointCSV(coord_file_, zcorn_file_)) {
+            throw std::runtime_error("Failed to initialize corner-point grid from CSV.");
+        }
+
+        std::cout << "Generating Fractures..." << std::endl;
+        generateFractures(natural_total_fracs_,
+                          natural_min_L_,
+                          natural_max_L_,
+                          natural_max_dip_,
+                          natural_min_strike_,
+                          natural_max_strike_,
+                          natural_aperture_,
+                          natural_perm_);
+        generateHydraulicFractures(hydraulic_total_fracs_,
+                                   hydraulic_well_length_,
+                                   hydraulic_hf_len_,
+                                   hydraulic_hf_height_,
+                                   hydraulic_aperture_,
+                                   hydraulic_perm_,
+                                   hydraulic_x_center_,
+                                   hydraulic_y_center_,
+                                   hydraulic_z_center_);
+
+        std::cout << "Processing Geometry..." << std::endl;
+        processGeometry();
+
+        std::cout << "Building Connections..." << std::endl;
+        buildConnections();
+
+        std::cout << "Setting up Wells..." << std::endl;
+        setupWells();
+        exportWells();
+
+        initState();
+        buildJacobianPattern();
+
+        std::cout << "Exporting Geometry for Visualization..." << std::endl;
+        exportStaticGeometry();
+
+        std::cout << "Starting Simulation..." << std::endl;
+        run(total_time_days_);
+
+        SimulationResult result;
+        result.pressure_field = getPressureData();
+        result.fracture_vertices = getFractureVertices();
+        return result;
+    }
+
     int getNextFractureId() const {
         int max_id = -1;
         for (const auto& f : fractures) {
@@ -2419,7 +2566,7 @@ public:
             }
 
             if (best_s != -1) {
-                double rw = 0.05;
+                double rw = well_radius_;
 
                 double re = computeSegmentEquivalentRadius(segments[best_s], rw);
                 double kf = segments[best_s].perm;
@@ -2431,7 +2578,7 @@ public:
                 Well w;
                 w.target_node_idx = n_matrix + best_s;
                 w.WI = 2.0 * PI * kf * b / denom;
-                w.P_bhp = 50.0;
+                w.P_bhp = well_pressure_;
 
                 if (!std::isfinite(w.WI) || w.WI <= EPSILON) continue;
 
@@ -3022,48 +3169,60 @@ public:
         }
         field.close();
     }
+private:
+    std::string coord_file_{"COORD.csv"};
+    std::string zcorn_file_{"ZCORN.csv"};
+
+    int natural_total_fracs_{60};
+    double natural_min_L_{30.0};
+    double natural_max_L_{80.0};
+    double natural_max_dip_{PI / 3.0};
+    double natural_min_strike_{0.0};
+    double natural_max_strike_{PI};
+    double natural_aperture_{0.01};
+    double natural_perm_{1000.0};
+
+    int hydraulic_total_fracs_{20};
+    double hydraulic_well_length_{2000.0};
+    double hydraulic_hf_len_{120.0};
+    double hydraulic_hf_height_{30.0};
+    double hydraulic_aperture_{0.1};
+    double hydraulic_perm_{1000.0};
+    double hydraulic_x_center_{-1.0};
+    double hydraulic_y_center_{-1.0};
+    double hydraulic_z_center_{-1.0};
+
+    double well_radius_{0.05};
+    double well_pressure_{50.0};
+
+    double total_time_days_{100.0};
 };
 
-int main() {
-    Simulator sim;
+PYBIND11_MODULE(edfm_core_corner, m) {
+    py::class_<SimulationResult>(m, "SimulationResult")
+        .def_readwrite("pressure_field", &SimulationResult::pressure_field)
+        .def_readwrite("temperature_field", &SimulationResult::temperature_field)
+        .def_readwrite("stress_field", &SimulationResult::stress_field)
+        .def_readwrite("fracture_vertices", &SimulationResult::fracture_vertices)
+        .def_readwrite("fracture_cells", &SimulationResult::fracture_cells);
 
-    // 1. 从 COORD.csv + ZCORN.csv 初始化角点网格
-    std::cout << "Initializing Corner-Point Grid from CSV..." << std::endl;
-    if (!sim.initGridFromCornerPointCSV("COORD.csv", "ZCORN.csv")) {
-        std::cerr << "Failed to initialize corner-point grid from CSV." << std::endl;
-        return 1;
-    }
-
-    // 2. 生成裂缝
-    std::cout << "Generating Fractures..." << std::endl;
-    sim.generateFractures();
-    sim.generateHydraulicFractures();
-
-    // 3. 计算几何相交 (EDFM)
-    std::cout << "Processing Geometry..." << std::endl;
-    sim.processGeometry();
-
-    // 4. 建立连接关系 (Transmissibility)
-    std::cout << "Building Connections..." << std::endl;
-    sim.buildConnections();
-
-    // 5. 建立井
-    std::cout << "Setting up Wells..." << std::endl;
-    sim.setupWells();
-    sim.exportWells();
-
-    // 6. 初始化状态
-    sim.initState();
-    sim.buildJacobianPattern();
-
-    // 7. 导出几何
-    std::cout << "Exporting Geometry for Visualization..." << std::endl;
-    sim.exportStaticGeometry();
-
-    // 8. 运行模拟
-    std::cout << "Starting Simulation..." << std::endl;
-    sim.run(100.0);
-
-    std::cout << "Done. Results saved to CSV." << std::endl;
-    return 0;
+    py::class_<Simulator>(m, "EDFMSimulator")
+        .def(py::init<>())
+        .def("setCornerPointFiles", &Simulator::setCornerPointFiles)
+        .def("setFractureParameters", &Simulator::setFractureParameters)
+        .def("setHydraulicFractureParameters", &Simulator::setHydraulicFractureParameters,
+             py::arg("total_fracs"),
+             py::arg("well_length"),
+             py::arg("hf_len"),
+             py::arg("hf_height"),
+             py::arg("aperture_val"),
+             py::arg("perm_val"),
+             py::arg("x_center") = -1.0,
+             py::arg("y_center") = -1.0,
+             py::arg("z_center") = -1.0)
+        .def("setWellParameters", &Simulator::setWellParameters)
+        .def("setSimulationParameters", &Simulator::setSimulationParameters)
+        .def("runSimulation", &Simulator::runSimulation)
+        .def("getPressureData", &Simulator::getPressureData)
+        .def("getFractureVertices", &Simulator::getFractureVertices);
 }
