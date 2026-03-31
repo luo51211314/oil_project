@@ -22,6 +22,11 @@ import vtk
 
 # 导入本地模块
 from .data_models import SimulationData, CornerPointCell, CornerPointGridData
+from .input_panel import (
+    MatrixPropertiesPanel, FluidPropertiesPanel, InitialStatePanel,
+    NaturalFracturesPanel, HydraulicFracturesPanel, WellParametersPanel,
+    SimulationControlPanel, groupbox_style
+)
 
 # 导入可视化模块
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -212,7 +217,8 @@ class MainWindow(QMainWindow):
         self.left_panel.setStyleSheet("background-color: #2b2b2b;")
         self.left_layout = QVBoxLayout(self.left_panel)
         self.left_layout.setContentsMargins(5, 5, 5, 5)
-        self.left_panel.setFixedWidth(320)
+        self.left_panel.setMinimumWidth(200)
+        self.left_panel.setMaximumWidth(500)
         
         # 中间面板
         self.center_panel = QWidget()
@@ -268,14 +274,42 @@ class MainWindow(QMainWindow):
         return algo_bar
     
     def on_algorithm_changed(self, algo):
-        """算法切换回调"""
+        """算法切换回调 - 只记录新算法，不清除绘制"""
         if self.corner_selection_mode_active:
             self.deactivate_corner_rectangle_selection_mode()
+        
+        # 记录前一个算法，用于后续绘制时判断是否切换了算法
+        self.previous_algorithm = getattr(self, 'current_algorithm', None)
         self.current_algorithm = algo
+        
         self.update_algorithm_parameter_pages()
         self.switch_tab(self.current_tab)
         if hasattr(self, 'status_bar'):
             self.status_bar.showMessage(f"Algorithm: {algo}")
+    
+    def check_and_clear_if_algorithm_switched(self):
+        """检查是否切换了算法，如果是则清除前一个算法的绘制"""
+        previous = getattr(self, 'previous_algorithm', None)
+        current = getattr(self, 'current_algorithm', None)
+        
+        if previous is not None and previous != current:
+            print(f"Algorithm switched from {previous} to {current}, clearing previous rendering...")
+            self.clear_previous_algorithm_rendering()
+            # 清除后重置previous_algorithm，避免重复清除
+            self.previous_algorithm = None
+    
+    def clear_previous_algorithm_rendering(self):
+        """清除前一个算法的所有绘制内容"""
+        if hasattr(self, 'vtk_renderer') and hasattr(self.vtk_renderer, 'renderer'):
+            # 清除VTK渲染器中的所有view props
+            self.vtk_renderer.renderer.RemoveAllViewProps()
+            self.vtk_renderer.vtk_widget.iren.Render()
+        
+        # 清除VTK渲染器缓存
+        if hasattr(self, 'vtk_renderer'):
+            self.vtk_renderer.clear_cache()
+        
+        print("Previous algorithm rendering cleared")
     
     def generate_mock_corner_point_grid(self, nx=20, ny=10, nz=5, lx=1000.0, ly=500.0, lz=100.0):
         """生成模拟角点网格数据（带地质曲面效果）
@@ -1231,10 +1265,19 @@ class MainWindow(QMainWindow):
         return group
 
     def create_corner_grid_page(self):
-        """创建 Corner Grid 的 Grid 页面。"""
+        """创建 Corner Grid 的 Grid 页面 - 使用滚动区域。"""
         page = QWidget()
         page.setStyleSheet("background-color: #2b2b2b;")
-        layout = QVBoxLayout(page)
+        main_layout = QVBoxLayout(page)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        
+        content = QWidget()
+        layout = QVBoxLayout(content)
         layout.setContentsMargins(10, 10, 10, 10)
 
         options_group = QGroupBox("Grid Options")
@@ -1356,25 +1399,132 @@ class MainWindow(QMainWindow):
         file_group.setLayout(file_layout)
         layout.addWidget(file_group)
 
+        # Grid Parameters (from Black Oil)
+        grid_params_group = QGroupBox("Grid Parameters")
+        grid_params_group.setStyleSheet(self.groupbox_style())
+        grid_params_layout = QGridLayout()
+
+        self.corner_spin_nx = self.create_spinbox(1, 500, 20)
+        self.corner_spin_ny = self.create_spinbox(1, 200, 10)
+        self.corner_spin_nz = self.create_spinbox(1, 100, 5)
+        self.corner_spin_lx = self.create_double_spinbox(1, 100000, 1000, decimals=1)
+        self.corner_spin_ly = self.create_double_spinbox(1, 100000, 500, decimals=1)
+        self.corner_spin_lz = self.create_double_spinbox(1, 10000, 100, decimals=1)
+
+        grid_params_layout.addWidget(QLabel("Nx:"), 0, 0)
+        grid_params_layout.addWidget(self.corner_spin_nx, 0, 1)
+        grid_params_layout.addWidget(QLabel("Ny:"), 1, 0)
+        grid_params_layout.addWidget(self.corner_spin_ny, 1, 1)
+        grid_params_layout.addWidget(QLabel("Nz:"), 2, 0)
+        grid_params_layout.addWidget(self.corner_spin_nz, 2, 1)
+        grid_params_layout.addWidget(QLabel("Lx (m):"), 3, 0)
+        grid_params_layout.addWidget(self.corner_spin_lx, 3, 1)
+        grid_params_layout.addWidget(QLabel("Ly (m):"), 4, 0)
+        grid_params_layout.addWidget(self.corner_spin_ly, 4, 1)
+        grid_params_layout.addWidget(QLabel("Lz (m):"), 5, 0)
+        grid_params_layout.addWidget(self.corner_spin_lz, 5, 1)
+
+        grid_params_group.setLayout(grid_params_layout)
+        layout.addWidget(grid_params_group)
+
+        self.corner_matrix_panel = MatrixPropertiesPanel()
+        layout.addWidget(self.corner_matrix_panel)
+
+        self.corner_initial_state_panel = InitialStatePanel()
+        layout.addWidget(self.corner_initial_state_panel)
+
+        self.corner_fluid_panel = FluidPropertiesPanel()
+        layout.addWidget(self.corner_fluid_panel)
+
+        self.corner_sim_control_panel = SimulationControlPanel()
+        layout.addWidget(self.corner_sim_control_panel)
+
         layout.addStretch()
+        scroll.setWidget(content)
+        main_layout.addWidget(scroll)
         return page
 
     def create_corner_wells_page(self):
-        """创建 Corner Grid 的 Wells 占位页面。"""
-        return self.create_placeholder_param_page([
-            ("Well Parameters", "Corner Grid 的井参数将放在这里。"),
-        ])
-
+        """创建 Corner Grid 的 Wells 页面 - 使用可复用组件"""
+        page = QWidget()
+        page.setStyleSheet("background-color: #2b2b2b;")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(10, 10, 10, 10)
+        
+        self.corner_well_panel = WellParametersPanel()
+        layout.addWidget(self.corner_well_panel)
+        
+        layout.addStretch()
+        return page
+    
     def create_corner_fractures_page(self):
-        """创建 Corner Grid 的 Fractures 占位页面。"""
-        return self.create_placeholder_param_page([
-            ("Natural Fractures", "Corner Grid 的天然裂缝参数将放在这里。"),
-            ("Hydraulic Fractures", "Corner Grid 的人工裂缝参数将放在这里。"),
-        ])
+        """创建 Corner Grid 的 Fractures 页面 - 使用可复用组件"""
+        page = QWidget()
+        page.setStyleSheet("background-color: #2b2b2b;")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(10, 10, 10, 10)
+        
+        self.corner_check_enable_hydraulic = QCheckBox("启用人工裂缝")
+        self.corner_check_enable_hydraulic.setChecked(True)
+        self.corner_check_enable_hydraulic.setStyleSheet("color: #cccccc; font-weight: bold;")
+        layout.addWidget(self.corner_check_enable_hydraulic)
+        
+        self.corner_natural_frac_panel = NaturalFracturesPanel()
+        # 设置corner专用的默认值（不影响black_oil）
+        self.corner_natural_frac_panel.spin_num_fracs.setValue(60)
+        self.corner_natural_frac_panel.spin_aperture.setValue(0.01)
+        layout.addWidget(self.corner_natural_frac_panel)
+        
+        self.corner_hydraulic_frac_panel = HydraulicFracturesPanel()
+        # 设置corner专用的默认值（不影响black_oil）
+        self.corner_hydraulic_frac_panel.spin_half_len.setValue(120.0)
+        self.corner_hydraulic_frac_panel.spin_height.setValue(30.0)
+        layout.addWidget(self.corner_hydraulic_frac_panel)
+        
+        layout.addStretch()
+        return page
 
     def create_corner_results_page(self):
-        """创建 Corner Grid 的 Results 页面。"""
-        return self.create_results_page("black_oil_corner_grid")
+        """创建 Corner Grid 的 Results 页面 - 仅显示控制"""
+        page = QWidget()
+        page.setStyleSheet("background-color: #2b2b2b;")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(10, 10, 10, 10)
+        
+        # 显示控制
+        control_group = QGroupBox("Display Control")
+        control_group.setStyleSheet(self.groupbox_style())
+        control_layout = QVBoxLayout()
+        
+        self.check_show_grid_corner = QCheckBox("Show Grid")
+        self.check_show_grid_corner.setChecked(True)
+        self.check_show_grid_corner.setStyleSheet("color: #cccccc;")
+        self.check_show_grid_corner.stateChanged.connect(self.toggle_corner_grid_visibility)
+        control_layout.addWidget(self.check_show_grid_corner)
+        
+        self.check_show_fractures_corner = QCheckBox("Show Fractures")
+        self.check_show_fractures_corner.setChecked(True)
+        self.check_show_fractures_corner.setStyleSheet("color: #cccccc;")
+        self.check_show_fractures_corner.stateChanged.connect(self.toggle_corner_fractures_visibility)
+        control_layout.addWidget(self.check_show_fractures_corner)
+        
+        self.check_show_wells_corner = QCheckBox("Show Wells")
+        self.check_show_wells_corner.setChecked(True)
+        self.check_show_wells_corner.setStyleSheet("color: #cccccc;")
+        self.check_show_wells_corner.stateChanged.connect(self.toggle_corner_wells_visibility)
+        control_layout.addWidget(self.check_show_wells_corner)
+        
+        self.check_show_pressure_corner = QCheckBox("Show Pressure Field")
+        self.check_show_pressure_corner.setChecked(True)
+        self.check_show_pressure_corner.setStyleSheet("color: #cccccc;")
+        self.check_show_pressure_corner.stateChanged.connect(self.toggle_corner_pressure_visibility)
+        control_layout.addWidget(self.check_show_pressure_corner)
+        
+        control_group.setLayout(control_layout)
+        layout.addWidget(control_group)
+        
+        layout.addStretch()
+        return page
 
     def create_placeholder_param_page(self, groups):
         """创建仅包含分组框和说明文字的占位参数页。"""
@@ -1433,6 +1583,9 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("请先选择COORD和ZCORN文件")
             return
 
+        # 检查是否切换了算法，如果是则清除前一个算法的绘制
+        self.check_and_clear_if_algorithm_switched()
+        
         self.clear_cache()
         self.status_bar.showMessage("Loading corner point grid from CSV...")
         self.clear_sim_status()
@@ -1460,6 +1613,13 @@ class MainWindow(QMainWindow):
             self.append_sim_status("  Data Loaded Successfully!")
             self.append_sim_status("=" * 50)
 
+            self.corner_well_panel.spin_well_x.setValue(cpg.origin_x + cpg.lx / 2.0)
+            self.corner_well_panel.spin_well_y.setValue(cpg.origin_y + cpg.ly / 2.0)
+            self.corner_well_panel.spin_well_z.setValue(cpg.origin_z + cpg.lz / 2.0)
+
+            self.corner_hydraulic_frac_panel.spin_half_len.setValue(min(50.0, cpg.ly / 4.0))
+            self.corner_hydraulic_frac_panel.spin_height.setValue(min(20.0, cpg.lz * 0.4))
+
             self.vtk_renderer.render_corner_point_grid(self.sim_data)
             self.update_corner_grid_statistics()
 
@@ -1475,6 +1635,148 @@ class MainWindow(QMainWindow):
             self.vtk_renderer.setup_camera_for_corner_grid(self.sim_data.corner_point_grid)
             self.vtk_renderer.vtk_widget.iren.Render()
             self.status_bar.showMessage("View reset")
+
+    def hide_corner_fractures(self):
+        """隐藏裂缝"""
+        self.vtk_renderer.hide_fractures()
+        self.status_bar.showMessage("裂缝已隐藏")
+
+    def draw_corner_wells_from_params(self):
+        """从参数绘制井"""
+        # 检查是否切换了算法，如果是则清除前一个算法的绘制
+        self.check_and_clear_if_algorithm_switched()
+        
+        well_params = self.corner_well_panel.get_values()
+        well_x_rel = well_params['x']
+        well_y_rel = well_params['y']
+        well_z_rel = well_params['z']
+        well_pressure = well_params['pressure']
+        well_radius = well_params['radius']
+        
+        origin_x = 0.0
+        origin_y = 0.0
+        origin_z = 0.0
+        if self.sim_data.corner_point_grid:
+            cpg = self.sim_data.corner_point_grid
+            origin_x = cpg.origin_x
+            origin_y = cpg.origin_y
+            origin_z = cpg.origin_z
+        
+        print(f"DEBUG: draw_corner_wells_from_params - origin: ({origin_x}, {origin_y}, {origin_z})")
+        
+        well = {
+            'id': 0,
+            'node_idx': 0,
+            'type': 'Matrix',
+            'x': well_x_rel + origin_x,
+            'y': well_y_rel + origin_y,
+            'z': well_z_rel + origin_z,
+            'WI': 1000.0,
+            'P_bhp': well_pressure
+        }
+        
+        self.sim_data.wells = [well]
+        self.vtk_renderer.render_corner_wells(self.sim_data)
+        self.status_bar.showMessage(f"绘制井: X={well_x_rel}, Y={well_y_rel}, Z={well_z_rel}, P={well_pressure} bar")
+
+    def hide_corner_wells(self):
+        """隐藏井"""
+        self.vtk_renderer.hide_wells()
+        self.status_bar.showMessage("井已隐藏")
+
+    def draw_corner_fractures_from_params(self):
+        """从参数生成并绘制裂缝"""
+        # 检查是否切换了算法，如果是则清除前一个算法的绘制
+        self.check_and_clear_if_algorithm_switched()
+        
+        import math
+        import random
+        
+        # 获取参数
+        num_fracs = self.corner_spin_num_fracs.value()
+        min_len = self.corner_spin_min_len.value()
+        max_len = self.corner_spin_max_len.value()
+        
+        # 获取网格范围和原点
+        origin_x = 0.0
+        origin_y = 0.0
+        origin_z = 0.0
+        if self.sim_data.corner_point_grid:
+            cpg = self.sim_data.corner_point_grid
+            lx, ly, lz = cpg.lx, cpg.ly, cpg.lz
+            origin_x = cpg.origin_x
+            origin_y = cpg.origin_y
+            origin_z = cpg.origin_z
+        else:
+            # 使用默认范围
+            lx, ly, lz = 1000.0, 500.0, 100.0
+        
+        print(f"DEBUG: draw_corner_fractures_from_params - origin: ({origin_x}, {origin_y}, {origin_z})")
+        
+        # 生成随机裂缝
+        fractures = []
+        for i in range(num_fracs):
+            # 随机中心点（相对坐标）
+            cx_rel = random.uniform(lx * 0.1, lx * 0.9)
+            cy_rel = random.uniform(ly * 0.1, ly * 0.9)
+            cz_rel = random.uniform(lz * 0.2, lz * 0.8)
+            
+            # 随机长度和方向
+            length = random.uniform(min_len, max_len)
+            angle = random.uniform(0, 2 * math.pi)
+            
+            # 计算四个顶点（垂直裂缝，相对坐标）
+            half_len = length / 2
+            dx = half_len * math.cos(angle)
+            dy = half_len * math.sin(angle)
+            
+            # 裂缝高度
+            height = 20.0
+            
+            frac = {
+                'id': i,
+                'points': [
+                    (cx_rel - dx + origin_x, cy_rel - dy + origin_y, cz_rel - height/2 + origin_z),
+                    (cx_rel + dx + origin_x, cy_rel + dy + origin_y, cz_rel - height/2 + origin_z),
+                    (cx_rel + dx + origin_x, cy_rel + dy + origin_y, cz_rel + height/2 + origin_z),
+                    (cx_rel - dx + origin_x, cy_rel - dy + origin_y, cz_rel + height/2 + origin_z)
+                ]
+            }
+            fractures.append(frac)
+        
+        self.sim_data.fractures = fractures
+        self.vtk_renderer.render_corner_fractures(self.sim_data)
+        self.status_bar.showMessage(f"绘制了 {num_fracs} 个裂缝")
+
+    def hide_corner_fractures(self):
+        """隐藏裂缝"""
+        self.vtk_renderer.hide_fractures()
+        self.status_bar.showMessage("裂缝已隐藏")
+
+    def hide_corner_pressure(self):
+        """隐藏压力场"""
+        self.vtk_renderer.hide_pressure_field()
+        self.status_bar.showMessage("压力场已隐藏")
+
+    def toggle_corner_grid_visibility(self, state):
+        """切换网格显示"""
+        if hasattr(self.vtk_renderer, 'toggle_grid_visibility'):
+            self.vtk_renderer.toggle_grid_visibility(state == Qt.Checked)
+
+    def toggle_corner_fractures_visibility(self, state):
+        """切换裂缝显示"""
+        if hasattr(self.vtk_renderer, 'toggle_fractures_visibility'):
+            self.vtk_renderer.toggle_fractures_visibility(state == Qt.Checked)
+
+    def toggle_corner_wells_visibility(self, state):
+        """切换井显示"""
+        if hasattr(self.vtk_renderer, 'toggle_wells_visibility'):
+            self.vtk_renderer.toggle_wells_visibility(state == Qt.Checked)
+
+    def toggle_corner_pressure_visibility(self, state):
+        """切换压力场显示"""
+        if hasattr(self.vtk_renderer, 'toggle_pressure_visibility'):
+            self.vtk_renderer.toggle_pressure_visibility(state == Qt.Checked)
 
     def register_results_controls(self, algorithm_key, view_mode_combo, combo_field,
                                   check_show_grid, check_show_fractures):
@@ -1621,16 +1923,27 @@ class MainWindow(QMainWindow):
         self.sim_status_text.clear()
     
     def clear_cache(self):
-        """清除VTK缓存"""
+        """清除VTK缓存 - 清除所有算法的数据和渲染器中的actor"""
+        # 清除VTK渲染器中的所有view props
+        if hasattr(self, 'vtk_renderer') and hasattr(self.vtk_renderer, 'renderer'):
+            self.vtk_renderer.renderer.RemoveAllViewProps()
+            self.vtk_renderer.vtk_widget.iren.Render()
+        
+        # 清除VTK渲染器缓存
+        if hasattr(self, 'vtk_renderer'):
+            self.vtk_renderer.clear_cache()
+        
+        # 清除本地缓存
         self.cache['pressure_actor'] = None
         self.cache['fracture_actors'] = []
         self.cache['scalar_bar'] = None
         self.cache['grid_lines_actor'] = None
         self.cache['data_hash'] = None
+        
+        # 清除corner point grid相关状态
         self.deactivate_corner_rectangle_selection_mode(restore_camera=False, clear_actor=True)
         self.clear_corner_selection_overlay(clear_params=False)
-        if hasattr(self, 'vtk_renderer'):
-            self.vtk_renderer.clear_cache()
+        
         print("Cache cleared")
 
     def reset_progress_state(self):
@@ -1689,6 +2002,7 @@ class MainWindow(QMainWindow):
             self.append_sim_status(line)
             return
 
+        # Black Oil算法格式: Step 1 t=0.001 dt=...
         step_match = re.match(r"^Step\s+(\d+)\s+t=([0-9eE.+-]+)\s+dt=", line)
         if step_match:
             step = int(step_match.group(1))
@@ -1697,6 +2011,20 @@ class MainWindow(QMainWindow):
             self.pending_step_summary = should_display
             if should_display:
                 self.append_sim_status(line)
+            return
+
+        # Corner Point Grid算法格式: Step 1 @ T=0.0000 trying dt=0.001 ...
+        corner_step_match = re.match(r"^Step\s+(\d+)\s+@\s+T=([0-9eE.+-]+)\s+trying\s+dt=", line)
+        if corner_step_match:
+            step = int(corner_step_match.group(1))
+            current_time = float(corner_step_match.group(2))
+            self.current_progress_step = max(self.current_progress_step, step)
+            self.current_progress_days = max(self.current_progress_days, current_time)
+            # Corner算法每10步显示一次
+            should_display = (step % 10 == 0)
+            if should_display:
+                self.update_progress_bar(self.current_progress_days, self.current_progress_step, "Corner Grid 运行中")
+                self.append_sim_status(f"Step {step} @ T={current_time:.4f} days")
             return
 
         summary_match = re.match(r"^\s*t=([0-9eE.+-]+)\s+days,\s+P:", line)
@@ -1918,7 +2246,7 @@ class MainWindow(QMainWindow):
         if result[0][0] == 'csv':
             self.load_corner_point_grid_from_csv_files(result[0][1], result[0][2])
         else:
-            self.run_corner_point_grid_mock_simulation()
+            self.run_corner_point_grid_simulation()
     
     def _browse_csv_file(self, line_edit, file_type):
         """浏览选择CSV文件"""
@@ -1962,35 +2290,318 @@ class MainWindow(QMainWindow):
             self.append_sim_status(f"Error loading CSV files: {str(e)}")
             self.status_bar.showMessage("Error loading CSV files")
     
-    def run_corner_point_grid_mock_simulation(self):
-        """运行角点网格模拟（使用模拟数据）"""
-        params = self.collect_simulation_params()
-        nx = params.get('nx', 20)
-        ny = params.get('ny', 10)
-        nz = params.get('nz', 5)
-        lx = params.get('lx', 1000.0)
-        ly = params.get('ly', 500.0)
-        lz = params.get('lz', 100.0)
+    def run_corner_point_grid_simulation(self):
+        """运行角点网格模拟 - 通过子进程运行以获取实时step输出"""
+        if self.sim_process and self.sim_process.state() != QProcess.NotRunning:
+            self.append_sim_status("Simulation is already running.")
+            return
         
-        self.append_sim_status(f"Grid: {nx}x{ny}x{nz}, Domain: {lx}x{ly}x{lz} m")
-        self.append_sim_status("Generating corner point grid with geological surface...")
+        if not self.corner_coord_file_path or not self.corner_zcorn_file_path:
+            self.append_sim_status("Error: Please select COORD and ZCORN files first!")
+            self.status_bar.showMessage("Please select COORD and ZCORN files")
+            return
         
-        cpg = self.generate_mock_corner_point_grid(nx, ny, nz, lx, ly, lz)
+        if not self.sim_data.corner_point_grid:
+            self.append_sim_status("Error: Please load COORD and ZCORN files first (click '绘制' button)")
+            self.status_bar.showMessage("Please load grid files first")
+            return
         
-        self.sim_data.corner_point_grid = cpg
-        self.sim_data.grid_info = {'nx': nx, 'ny': ny, 'nz': nz, 'Lx': lx, 'Ly': ly, 'Lz': lz}
+        import os
+        import tempfile
+        import json
         
-        self.append_sim_status(f"Generated {len(cpg.cells)} cells")
-        self.append_sim_status(f"Pressure range: {cpg.min_pressure:.2f} - {cpg.max_pressure:.2f} bar")
-        self.append_sim_status("")
+        # 不清除缓存，保留已绘制的网格
+        self.reset_progress_state()
+        
+        self.status_bar.showMessage("Corner Point Grid simulation...")
+        self.clear_sim_status()
+        
+        sim_params = self.corner_sim_control_panel.get_values()
+        natural_frac_params = self.corner_natural_frac_panel.get_values()
+        hydraulic_frac_params = self.corner_hydraulic_frac_panel.get_values()
+        well_params = self.corner_well_panel.get_values()
+        
+        origin_x = self.sim_data.corner_point_grid.origin_x
+        origin_y = self.sim_data.corner_point_grid.origin_y
+        origin_z = self.sim_data.corner_point_grid.origin_z
+        lx = self.sim_data.corner_point_grid.lx
+        ly = self.sim_data.corner_point_grid.ly
+        lz = self.sim_data.corner_point_grid.lz
+        
         self.append_sim_status("=" * 50)
-        self.append_sim_status("  Simulation Completed Successfully!")
+        self.append_sim_status("  Corner Point Grid Simulation Starting...")
         self.append_sim_status("=" * 50)
+        self.append_sim_status(f"COORD: {self.corner_coord_file_path}")
+        self.append_sim_status(f"ZCORN: {self.corner_zcorn_file_path}")
+        self.append_sim_status(f"Grid origin: ({origin_x}, {origin_y}, {origin_z})")
+        self.append_sim_status(f"Grid size: ({lx}, {ly}, {lz})")
+        self.append_sim_status(f"Well abs coords: ({well_params['x']}, {well_params['y']}, {well_params['z']})")
+        self.append_sim_status(f"Well pressure: {well_params['pressure']} bar")
+        self.append_sim_status(f"Well radius: {well_params['radius']} m")
+        self.append_sim_status(f"Simulation Time: {sim_params['simulation_time']} days")
         
-        self.vtk_renderer.render_corner_point_grid(self.sim_data)
-        self.update_corner_grid_statistics()
+        rel_well_x = well_params['x'] - origin_x
+        rel_well_y = well_params['y'] - origin_y
+        rel_well_z = well_params['z'] - origin_z
         
-        self.status_bar.showMessage("Corner Point Grid simulation completed")
+        if self.corner_check_enable_hydraulic.isChecked():
+            half_len = hydraulic_frac_params['half_len']
+            height = hydraulic_frac_params['height']
+            self.append_sim_status(f"Well relative coords: ({rel_well_x}, {rel_well_y}, {rel_well_z})")
+            self.append_sim_status(f"Hydraulic frac params: half_len={half_len}, height={height}")
+        
+        tmp_dir = os.path.join(self.project_root, '.tmp')
+        os.makedirs(tmp_dir, exist_ok=True)
+        fd, self.pending_result_path = tempfile.mkstemp(prefix='corner_simulation_result_', suffix='.json', dir=tmp_dir)
+        os.close(fd)
+        self.sim_output_buffer = ""
+        
+        params = {
+            'algorithm': 'corner_edfm',
+            'coord_file': self.corner_coord_file_path,
+            'zcorn_file': self.corner_zcorn_file_path,
+            'num_fracs': natural_frac_params.get('num_fracs', 60),  # 默认60
+            'min_len': natural_frac_params.get('min_len', 30.0),
+            'max_len': natural_frac_params.get('max_len', 80.0),
+            'max_dip': 3.14159 / 3.0,
+            'min_strike': 0.0,
+            'max_strike': 3.14159,
+            'aperture': natural_frac_params.get('aperture', 0.01),  # 默认0.01
+            'frac_perm': natural_frac_params.get('perm', 1000.0),
+            'hf_enabled': self.corner_check_enable_hydraulic.isChecked(),
+            'hf_count': hydraulic_frac_params['num_stages'] if self.corner_check_enable_hydraulic.isChecked() else 0,
+            'hf_well_length': 100.0,
+            'hf_length': hydraulic_frac_params.get('half_len', 120.0) * 2.0 if self.corner_check_enable_hydraulic.isChecked() else 240.0,  # 默认120*2
+            'hf_height': hydraulic_frac_params.get('height', 30.0) if self.corner_check_enable_hydraulic.isChecked() else 30.0,  # 默认30
+            'hf_aperture': hydraulic_frac_params.get('aperture', 0.01) if self.corner_check_enable_hydraulic.isChecked() else 0.01,
+            'hf_perm': hydraulic_frac_params['perm'] if self.corner_check_enable_hydraulic.isChecked() else 1000.0,
+            'hf_center_x': -1.0 if self.corner_check_enable_hydraulic.isChecked() else -1.0,  # 自动中心
+            'hf_center_y': -1.0 if self.corner_check_enable_hydraulic.isChecked() else -1.0,
+            'hf_center_z': -1.0 if self.corner_check_enable_hydraulic.isChecked() else -1.0,
+            'well_radius': well_params['radius'],
+            'well_pressure': well_params['pressure'],
+            'simulation_time': sim_params['simulation_time'],
+        }
+        
+        self.sim_process = QProcess(self)
+        self.sim_process.setWorkingDirectory(self.project_root)
+        self.sim_process.setProgram(sys.executable)
+        self.sim_process.setArguments([
+            '-u',
+            '-m',
+            'front.simulation_runner',
+            '--output',
+            self.pending_result_path,
+            '--params',
+            json.dumps(params),
+        ])
+        self.sim_process.setProcessChannelMode(QProcess.MergedChannels)
+        self.sim_process.readyReadStandardOutput.connect(self.handle_process_output)
+        self.sim_process.finished.connect(self.handle_corner_simulation_finished)
+        self.sim_process.errorOccurred.connect(self.handle_simulation_error)
+        
+        self.run_btn.setEnabled(False)
+        self.sim_process.start()
+    
+    def handle_corner_simulation_finished(self, exit_code, exit_status):
+        """处理corner模拟完成事件"""
+        self.run_btn.setEnabled(True)
+        
+        if exit_code != 0:
+            self.append_sim_status(f"Simulation failed with exit code {exit_code}")
+            self.status_bar.showMessage("Simulation failed")
+            self.mark_progress_failed()
+            return
+        
+        try:
+            import os
+            from .data_models import SimulationData
+            
+            sim_data = SimulationData()
+            sim_data.load_json(self.pending_result_path)
+            
+            self.sim_data.pressure_field = sim_data.pressure_field
+            self.sim_data.fractures = sim_data.fractures
+            self.sim_data.wells = sim_data.wells
+            self.sim_data.cell_geometry_with_pressure = sim_data.cell_geometry_with_pressure
+            # 只在corner_point_grid不存在时才设置
+            if self.sim_data.corner_point_grid is None:
+                self.sim_data.corner_point_grid = sim_data.corner_point_grid
+            
+            well_params = self.corner_well_panel.get_values()
+            well = {
+                'id': 0,
+                'node_idx': 0,
+                'type': 'Matrix',
+                'x': well_params['x'],
+                'y': well_params['y'],
+                'z': well_params['z'],
+                'WI': 1000.0,
+                'P_bhp': well_params['pressure']
+            }
+            self.sim_data.wells = [well]
+            
+            x_offset = 0.0
+            y_offset = 0.0
+            z_offset = 0.0
+            if self.sim_data.corner_point_grid:
+                x_offset = self.sim_data.corner_point_grid.origin_x
+                y_offset = self.sim_data.corner_point_grid.origin_y
+                z_offset = self.sim_data.corner_point_grid.origin_z
+            
+            natural_frac_params = self.corner_natural_frac_panel.get_values()
+            for frac in self.sim_data.fractures:
+                frac_id = frac.get('id', 0)
+                frac['type'] = 'hydraulic' if frac_id >= natural_frac_params['num_fracs'] else 'natural'
+                for i, p in enumerate(frac['points']):
+                    frac['points'][i] = (p[0] + x_offset, p[1] + y_offset, p[2] + z_offset)
+            
+            if self.sim_data.pressure_field:
+                pressures = [p[3] for p in self.sim_data.pressure_field]
+                min_p, max_p = min(pressures), max(pressures)
+            else:
+                min_p, max_p = 0, 0
+            
+            self.append_sim_status(f"Pressure range: {min_p:.2f} - {max_p:.2f} bar")
+            self.append_sim_status(f"Pressure field points: {len(self.sim_data.pressure_field)}")
+            self.append_sim_status(f"Fractures: {len(self.sim_data.fractures)}")
+            self.append_sim_status(f"Wells: {len(self.sim_data.wells)}")
+            self.append_sim_status("")
+            self.append_sim_status("=" * 50)
+            self.append_sim_status("  Simulation Completed Successfully!")
+            self.append_sim_status("=" * 50)
+            
+            # 只渲染压力场、裂缝、井，不重新渲染网格（用户已先点击"绘制"显示网格）
+            self.vtk_renderer.render_corner_pressure_field(self.sim_data)
+            self.vtk_renderer.render_corner_wells(self.sim_data)
+            self.vtk_renderer.render_corner_fractures(self.sim_data)
+            self.update_corner_grid_statistics()
+            
+            self.status_bar.showMessage("Corner Point Grid simulation completed")
+            
+        except Exception as e:
+            self.append_sim_status(f"Error loading simulation result: {str(e)}")
+            self.status_bar.showMessage("Error loading result")
+            self.mark_progress_failed()
+            import traceback
+            traceback.print_exc()
+    
+    def _generate_corner_wells_from_params(self):
+        """从Wells页面参数生成井数据"""
+        well_params = self.corner_well_panel.get_values()
+        well_x_rel = well_params['x']
+        well_y_rel = well_params['y']
+        well_z_rel = well_params['z']
+        well_pressure = well_params['pressure']
+        
+        origin_x = 0.0
+        origin_y = 0.0
+        origin_z = 0.0
+        if self.sim_data.corner_point_grid:
+            cpg = self.sim_data.corner_point_grid
+            origin_x = cpg.origin_x
+            origin_y = cpg.origin_y
+            origin_z = cpg.origin_z
+        
+        print(f"DEBUG: _generate_corner_wells_from_params - origin: ({origin_x}, {origin_y}, {origin_z})")
+        
+        well = {
+            'id': 0,
+            'node_idx': 0,
+            'type': 'Matrix',
+            'x': well_x_rel + origin_x,
+            'y': well_y_rel + origin_y,
+            'z': well_z_rel + origin_z,
+            'WI': 1000.0,
+            'P_bhp': well_pressure
+        }
+        
+        self.sim_data.wells = [well]
+    
+    def _generate_corner_fractures_from_params(self):
+        """从Fractures页面参数生成裂缝数据 - 天然裂缝和人工裂缝"""
+        import math
+        import random
+        
+        fractures = []
+        frac_id = 0
+        
+        natural_params = self.corner_natural_frac_panel.get_values()
+        num_natural = natural_params['num_fracs']
+        min_len = natural_params['min_len']
+        max_len = natural_params['max_len']
+        
+        origin_x = 0.0
+        origin_y = 0.0
+        origin_z = 0.0
+        if self.sim_data.corner_point_grid:
+            cpg = self.sim_data.corner_point_grid
+            lx, ly, lz = cpg.lx, cpg.ly, cpg.lz
+            origin_x = cpg.origin_x
+            origin_y = cpg.origin_y
+            origin_z = cpg.origin_z
+        else:
+            lx, ly, lz = 1000.0, 500.0, 100.0
+        
+        print(f"DEBUG: _generate_corner_fractures_from_params - origin: ({origin_x}, {origin_y}, {origin_z})")
+        
+        for i in range(num_natural):
+            cx_rel = random.uniform(lx * 0.1, lx * 0.9)
+            cy_rel = random.uniform(ly * 0.1, ly * 0.9)
+            cz_rel = random.uniform(lz * 0.2, lz * 0.8)
+            
+            length = random.uniform(min_len, max_len)
+            angle = random.uniform(0, 2 * math.pi)
+            
+            half_len = length / 2
+            dx = half_len * math.cos(angle)
+            dy = half_len * math.sin(angle)
+            height = 20.0
+            
+            frac = {
+                'id': frac_id,
+                'type': 'natural',
+                'points': [
+                    (cx_rel - dx + origin_x, cy_rel - dy + origin_y, cz_rel - height/2 + origin_z),
+                    (cx_rel + dx + origin_x, cy_rel + dy + origin_y, cz_rel - height/2 + origin_z),
+                    (cx_rel + dx + origin_x, cy_rel + dy + origin_y, cz_rel + height/2 + origin_z),
+                    (cx_rel - dx + origin_x, cy_rel - dy + origin_y, cz_rel + height/2 + origin_z)
+                ]
+            }
+            fractures.append(frac)
+            frac_id += 1
+        
+        if self.corner_check_enable_hydraulic.isChecked():
+            hydraulic_params = self.corner_hydraulic_frac_panel.get_values()
+            num_stages = hydraulic_params['num_stages']
+            half_len = hydraulic_params['half_len']
+            height = hydraulic_params['height']
+            
+            well_params = self.corner_well_panel.get_values()
+            well_x_rel = well_params['x']
+            well_y_rel = well_params['y']
+            well_z_rel = well_params['z']
+            
+            stage_spacing = 50.0
+            start_x_rel = well_x_rel - (num_stages - 1) * stage_spacing / 2
+            
+            for i in range(num_stages):
+                stage_x_rel = start_x_rel + i * stage_spacing
+                
+                frac = {
+                    'id': frac_id,
+                    'type': 'hydraulic',
+                    'points': [
+                        (stage_x_rel - half_len + origin_x, well_y_rel - 5 + origin_y, well_z_rel - height/2 + origin_z),
+                        (stage_x_rel + half_len + origin_x, well_y_rel - 5 + origin_y, well_z_rel - height/2 + origin_z),
+                        (stage_x_rel + half_len + origin_x, well_y_rel + 5 + origin_y, well_z_rel + height/2 + origin_z),
+                        (stage_x_rel - half_len + origin_x, well_y_rel + 5 + origin_y, well_z_rel + height/2 + origin_z)
+                    ]
+                }
+                fractures.append(frac)
+                frac_id += 1
+        
+        self.sim_data.fractures = fractures
     
     def update_corner_grid_statistics(self):
         """更新角点网格统计信息"""
@@ -2663,6 +3274,9 @@ class MainWindow(QMainWindow):
     
     def render_mode3_smooth_pressure(self):
         """渲染平滑压力场"""
+        # 检查是否切换了算法，如果是则清除前一个算法的绘制
+        self.check_and_clear_if_algorithm_switched()
+        
         if self.current_algorithm == "black_oil_corner_grid" and self.sim_data.corner_point_grid:
             self.vtk_renderer.render_corner_point_grid(self.sim_data)
             self.reapply_corner_selection_overlay()
@@ -2672,6 +3286,9 @@ class MainWindow(QMainWindow):
     
     def render_fractures(self):
         """渲染裂缝"""
+        # 检查是否切换了算法，如果是则清除前一个算法的绘制
+        self.check_and_clear_if_algorithm_switched()
+        
         self.vtk_renderer.render_fractures(self.sim_data)
     
     def update_statistics(self):

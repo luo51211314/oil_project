@@ -57,6 +57,13 @@ class CornerPointCell:
         if len(corners) == 8:
             self.corners = [(c[0], c[1], c[2]) for c in corners]
     
+    def get_center(self):
+        """计算单元中心点坐标"""
+        cx = sum(c[0] for c in self.corners) / 8.0
+        cy = sum(c[1] for c in self.corners) / 8.0
+        cz = sum(c[2] for c in self.corners) / 8.0
+        return (cx, cy, cz)
+    
     def to_dict(self):
         return {
             'id': self.id,
@@ -87,6 +94,9 @@ class CornerPointGridData:
         self.lx = 1000.0
         self.ly = 500.0
         self.lz = 100.0
+        self.origin_x = 0.0
+        self.origin_y = 0.0
+        self.origin_z = 0.0
         self.cells = []
         self.fractures = []
         self.min_pressure = 0.0
@@ -134,6 +144,7 @@ class SimulationData:
         self.grid_lines = []
         self.interpolated_pressure = []
         self.corner_point_grid = None
+        self.cell_geometry_with_pressure = None
         
     def generate_from_cpp(self, sim_result, nx, ny, nz, lx, ly, lz, grid_lines=None, interpolated_pressure=None):
         """从C++结果生成数据"""
@@ -208,6 +219,12 @@ class SimulationData:
 
     def to_dict(self):
         """序列化模拟结果，供子进程返回给UI进程。"""
+        import numpy as np
+        
+        cell_geom_list = None
+        if self.cell_geometry_with_pressure is not None and isinstance(self.cell_geometry_with_pressure, np.ndarray):
+            cell_geom_list = self.cell_geometry_with_pressure.tolist()
+        
         return {
             'grid_info': dict(self.grid_info),
             'pressure_field': [list(point) for point in self.pressure_field],
@@ -224,10 +241,13 @@ class SimulationData:
             ],
             'wells': list(self.wells),
             'corner_point_grid': self.corner_point_grid.to_dict() if self.corner_point_grid else None,
+            'cell_geometry_with_pressure': cell_geom_list,
         }
 
     def load_dict(self, payload):
         """从序列化结果恢复模拟数据。"""
+        import numpy as np
+        
         self.grid_info = dict(payload.get('grid_info', self.grid_info))
         self.pressure_field = [tuple(point) for point in payload.get('pressure_field', [])]
         self.temperature_field = [tuple(point) for point in payload.get('temperature_field', [])]
@@ -249,6 +269,12 @@ class SimulationData:
             self.corner_point_grid = CornerPointGridData.from_dict(cpg_data)
         else:
             self.corner_point_grid = None
+        
+        cell_geom_list = payload.get('cell_geometry_with_pressure')
+        if cell_geom_list is not None:
+            self.cell_geometry_with_pressure = np.array(cell_geom_list, dtype=np.float64)
+        else:
+            self.cell_geometry_with_pressure = None
 
     def save_json(self, output_path):
         """将模拟结果写入JSON文件。"""
@@ -259,6 +285,159 @@ class SimulationData:
         """从JSON文件加载模拟结果。"""
         with open(input_path, 'r', encoding='utf-8') as fp:
             self.load_dict(json.load(fp))
+
+
+class FractureData:
+    """裂缝数据"""
+    def __init__(self, frac_id=-1):
+        self.id = frac_id
+        self.points = []  # 4个顶点 (x,y,z)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'points': [list(p) for p in self.points]
+        }
+    
+    @classmethod
+    def from_dict(cls, data):
+        f = cls(data.get('id', -1))
+        f.points = [tuple(p) for p in data.get('points', [])]
+        return f
+
+
+class WellData:
+    """井数据"""
+    def __init__(self, well_id=-1):
+        self.id = well_id
+        self.node_idx = 0
+        self.type = "Fracture"  # Fracture or Matrix
+        self.x = 0.0
+        self.y = 0.0
+        self.z = 0.0
+        self.WI = 0.0  # 井指数
+        self.P_bhp = 0.0  # 井底压力
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'node_idx': self.node_idx,
+            'type': self.type,
+            'x': self.x,
+            'y': self.y,
+            'z': self.z,
+            'WI': self.WI,
+            'P_bhp': self.P_bhp
+        }
+    
+    @classmethod
+    def from_dict(cls, data):
+        w = cls(data.get('id', -1))
+        w.node_idx = data.get('node_idx', 0)
+        w.type = data.get('type', 'Fracture')
+        w.x = data.get('x', 0.0)
+        w.y = data.get('y', 0.0)
+        w.z = data.get('z', 0.0)
+        w.WI = data.get('WI', 0.0)
+        w.P_bhp = data.get('P_bhp', 0.0)
+        return w
+
+
+class PressureFieldData:
+    """压力场数据 - 从CSV加载"""
+    def __init__(self):
+        self.cell_id = 0
+        self.x = 0.0
+        self.y = 0.0
+        self.z = 0.0
+        self.pressure = 0.0
+        self.Sw = 0.0  # 水饱和度
+        self.Sg = 0.0  # 气饱和度
+    
+    def to_dict(self):
+        return {
+            'cell_id': self.cell_id,
+            'x': self.x,
+            'y': self.y,
+            'z': self.z,
+            'pressure': self.pressure,
+            'Sw': self.Sw,
+            'Sg': self.Sg
+        }
+
+
+def load_fractures_from_csv(csv_path):
+    """从CSV加载裂缝几何数据
+    
+    CSV格式: id,x0,y0,z0,x1,y1,z1,x2,y2,z2,x3,y3,z3
+    """
+    import csv
+    fractures = []
+    
+    with open(csv_path, 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            frac = FractureData(int(row['id']))
+            frac.points = [
+                (float(row['x0']), float(row['y0']), float(row['z0'])),
+                (float(row['x1']), float(row['y1']), float(row['z1'])),
+                (float(row['x2']), float(row['y2']), float(row['z2'])),
+                (float(row['x3']), float(row['y3']), float(row['z3']))
+            ]
+            fractures.append(frac)
+    
+    print(f"Loaded {len(fractures)} fractures from {csv_path}")
+    return fractures
+
+
+def load_wells_from_csv(csv_path):
+    """从CSV加载井数据
+    
+    CSV格式: well_id,node_idx,type,x,y,z,WI,P_bhp
+    """
+    import csv
+    wells = []
+    
+    with open(csv_path, 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            well = WellData(int(row['well_id']))
+            well.node_idx = int(row['node_idx'])
+            well.type = row['type']
+            well.x = float(row['x'])
+            well.y = float(row['y'])
+            well.z = float(row['z'])
+            well.WI = float(row['WI'])
+            well.P_bhp = float(row['P_bhp'])
+            wells.append(well)
+    
+    print(f"Loaded {len(wells)} wells from {csv_path}")
+    return wells
+
+
+def load_pressure_field_from_csv(csv_path):
+    """从CSV加载压力场数据
+    
+    CSV格式: cell_id,x,y,z,P,Sw,Sg
+    """
+    import csv
+    pressure_data = []
+    
+    with open(csv_path, 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            p = PressureFieldData()
+            p.cell_id = int(row['cell_id'])
+            p.x = float(row['x'])
+            p.y = float(row['y'])
+            p.z = float(row['z'])
+            p.pressure = float(row['P'])
+            p.Sw = float(row['Sw'])
+            p.Sg = float(row['Sg'])
+            pressure_data.append(p)
+    
+    print(f"Loaded {len(pressure_data)} pressure field points from {csv_path}")
+    return pressure_data
 
 
 def load_corner_point_grid_from_csv(coord_csv_path, zcorn_csv_path):
@@ -338,8 +517,13 @@ def load_corner_point_grid_from_csv(coord_csv_path, zcorn_csv_path):
     grid.lx = max(all_x) - min(all_x) if all_x else 1000.0
     grid.ly = max(all_y) - min(all_y) if all_y else 500.0
     grid.lz = max(all_z) - min(all_z) if all_z else 100.0
+    grid.origin_x = min(all_x) if all_x else 0.0
+    grid.origin_y = min(all_y) if all_y else 0.0
+    grid.origin_z = min(all_z) if all_z else 0.0
     
     print(f"Grid dimensions: {grid.nx}x{grid.ny}x{grid.nz}")
+    print(f"Grid origin: ({grid.origin_x}, {grid.origin_y}, {grid.origin_z})")
+    print(f"Grid size: ({grid.lx}, {grid.ly}, {grid.lz})")
     print(f"COORD dimensions: {max_i}x{max_j}")
     
     cell_id = 0

@@ -271,6 +271,342 @@ class FracturesInputPanel(QWidget):
         }
 
 
+def create_spinbox(minimum, maximum, value):
+    spin = QSpinBox()
+    spin.setRange(minimum, maximum)
+    spin.setValue(value)
+    return spin
+
+
+def create_double_spinbox(minimum, maximum, value, decimals=2, step=None):
+    spin = QDoubleSpinBox()
+    spin.setRange(minimum, maximum)
+    spin.setDecimals(decimals)
+    spin.setValue(value)
+    if step is not None:
+        spin.setSingleStep(step)
+    return spin
+
+
+class MatrixPropertiesPanel(QWidget):
+    """基质属性参数面板 - 可复用"""
+    def __init__(self, parent=None, prefix=""):
+        super().__init__(parent)
+        self.prefix = prefix
+        self.init_ui()
+    
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        group = QGroupBox("Matrix Properties")
+        group.setStyleSheet(groupbox_style())
+        grid = QGridLayout()
+        
+        self.spin_porosity = create_double_spinbox(0.0, 1.0, 0.2, decimals=4)
+        self.spin_perm_x = create_double_spinbox(0.0, 1000000, 0.001, decimals=6)
+        self.spin_perm_y = create_double_spinbox(0.0, 1000000, 0.001, decimals=6)
+        self.spin_perm_z = create_double_spinbox(0.0, 1000000, 0.0001, decimals=6)
+        
+        grid.addWidget(QLabel("Porosity:"), 0, 0)
+        grid.addWidget(self.spin_porosity, 0, 1)
+        grid.addWidget(QLabel("Kx (Darcy):"), 1, 0)
+        grid.addWidget(self.spin_perm_x, 1, 1)
+        grid.addWidget(QLabel("Ky (Darcy):"), 2, 0)
+        grid.addWidget(self.spin_perm_y, 2, 1)
+        grid.addWidget(QLabel("Kz (Darcy):"), 3, 0)
+        grid.addWidget(self.spin_perm_z, 3, 1)
+        
+        group.setLayout(grid)
+        layout.addWidget(group)
+    
+    def get_values(self):
+        return {
+            'porosity': self.spin_porosity.value(),
+            'perm_x': self.spin_perm_x.value(),
+            'perm_y': self.spin_perm_y.value(),
+            'perm_z': self.spin_perm_z.value()
+        }
+
+
+class FluidPropertiesPanel(QWidget):
+    """流体属性参数面板 - 可复用"""
+    def __init__(self, parent=None, prefix=""):
+        super().__init__(parent)
+        self.prefix = prefix
+        self.init_ui()
+    
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        group = QGroupBox("Fluid Properties")
+        group.setStyleSheet(groupbox_style())
+        grid = QGridLayout()
+        
+        self.spin_mu_w = create_double_spinbox(0.0, 1000.0, 1.0, decimals=4)
+        self.spin_mu_o = create_double_spinbox(0.0, 1000.0, 5.0, decimals=4)
+        self.spin_mu_g = create_double_spinbox(0.0, 1000.0, 0.2, decimals=4)
+        self.spin_cw = create_double_spinbox(0.0, 1.0, 1e-8, decimals=8, step=1e-8)
+        self.spin_co = create_double_spinbox(0.0, 1.0, 1e-5, decimals=8, step=1e-6)
+        self.spin_cg = create_double_spinbox(0.0, 1.0, 1e-3, decimals=6, step=1e-4)
+        self.spin_p_ref = create_double_spinbox(0.0, 1000000, 100.0, decimals=2)
+        self.spin_swi = create_double_spinbox(0.0, 1.0, 0.2, decimals=4)
+        self.spin_sor = create_double_spinbox(0.0, 1.0, 0.2, decimals=4)
+        self.spin_sgc = create_double_spinbox(0.0, 1.0, 0.05, decimals=4)
+        
+        grid.addWidget(QLabel("mu_w (cP):"), 0, 0)
+        grid.addWidget(self.spin_mu_w, 0, 1)
+        grid.addWidget(QLabel("mu_o (cP):"), 1, 0)
+        grid.addWidget(self.spin_mu_o, 1, 1)
+        grid.addWidget(QLabel("mu_g (cP):"), 2, 0)
+        grid.addWidget(self.spin_mu_g, 2, 1)
+        grid.addWidget(QLabel("cw (1/bar):"), 3, 0)
+        grid.addWidget(self.spin_cw, 3, 1)
+        grid.addWidget(QLabel("co (1/bar):"), 4, 0)
+        grid.addWidget(self.spin_co, 4, 1)
+        grid.addWidget(QLabel("cg (1/bar):"), 5, 0)
+        grid.addWidget(self.spin_cg, 5, 1)
+        grid.addWidget(QLabel("P_ref (bar):"), 6, 0)
+        grid.addWidget(self.spin_p_ref, 6, 1)
+        grid.addWidget(QLabel("Swi:"), 7, 0)
+        grid.addWidget(self.spin_swi, 7, 1)
+        grid.addWidget(QLabel("Sor:"), 8, 0)
+        grid.addWidget(self.spin_sor, 8, 1)
+        grid.addWidget(QLabel("Sgc:"), 9, 0)
+        grid.addWidget(self.spin_sgc, 9, 1)
+        
+        group.setLayout(grid)
+        layout.addWidget(group)
+    
+    def get_values(self):
+        return {
+            'mu_w': self.spin_mu_w.value(),
+            'mu_o': self.spin_mu_o.value(),
+            'mu_g': self.spin_mu_g.value(),
+            'cw': self.spin_cw.value(),
+            'co': self.spin_co.value(),
+            'cg': self.spin_cg.value(),
+            'p_ref': self.spin_p_ref.value(),
+            'swi': self.spin_swi.value(),
+            'sor': self.spin_sor.value(),
+            'sgc': self.spin_sgc.value()
+        }
+
+
+class InitialStatePanel(QWidget):
+    """初始状态参数面板 - 可复用"""
+    def __init__(self, parent=None, prefix=""):
+        super().__init__(parent)
+        self.prefix = prefix
+        self.init_ui()
+    
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        group = QGroupBox("Initial State")
+        group.setStyleSheet(groupbox_style())
+        grid = QGridLayout()
+        
+        self.spin_initial_pressure = create_double_spinbox(0.0, 1000000, 200.0, decimals=2)
+        self.spin_initial_sw = create_double_spinbox(0.0, 1.0, 0.2, decimals=4)
+        self.spin_initial_sg = create_double_spinbox(0.0, 1.0, 0.05, decimals=4)
+        
+        grid.addWidget(QLabel("Pressure (bar):"), 0, 0)
+        grid.addWidget(self.spin_initial_pressure, 0, 1)
+        grid.addWidget(QLabel("Sw:"), 1, 0)
+        grid.addWidget(self.spin_initial_sw, 1, 1)
+        grid.addWidget(QLabel("Sg:"), 2, 0)
+        grid.addWidget(self.spin_initial_sg, 2, 1)
+        
+        group.setLayout(grid)
+        layout.addWidget(group)
+    
+    def get_values(self):
+        return {
+            'initial_pressure': self.spin_initial_pressure.value(),
+            'initial_sw': self.spin_initial_sw.value(),
+            'initial_sg': self.spin_initial_sg.value()
+        }
+
+
+class NaturalFracturesPanel(QWidget):
+    """天然裂缝参数面板 - 可复用"""
+    def __init__(self, parent=None, prefix=""):
+        super().__init__(parent)
+        self.prefix = prefix
+        self.init_ui()
+    
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        group = QGroupBox("Natural Fractures")
+        group.setStyleSheet(groupbox_style())
+        grid = QGridLayout()
+        
+        self.spin_num_fracs = create_spinbox(0, 500, 100)
+        self.spin_min_len = create_double_spinbox(0.0, 100000.0, 30.0, decimals=2)
+        self.spin_max_len = create_double_spinbox(0.0, 100000.0, 80.0, decimals=2)
+        self.spin_aperture = create_double_spinbox(0.0, 10.0, 0.001, decimals=4)
+        self.spin_perm = create_double_spinbox(0.0, 1000000.0, 1000.0, decimals=2)
+        
+        grid.addWidget(QLabel("裂缝数量:"), 0, 0)
+        grid.addWidget(self.spin_num_fracs, 0, 1)
+        grid.addWidget(QLabel("Min Length (m):"), 1, 0)
+        grid.addWidget(self.spin_min_len, 1, 1)
+        grid.addWidget(QLabel("Max Length (m):"), 2, 0)
+        grid.addWidget(self.spin_max_len, 2, 1)
+        grid.addWidget(QLabel("Aperture (m):"), 3, 0)
+        grid.addWidget(self.spin_aperture, 3, 1)
+        grid.addWidget(QLabel("Permeability (D):"), 4, 0)
+        grid.addWidget(self.spin_perm, 4, 1)
+        
+        group.setLayout(grid)
+        layout.addWidget(group)
+    
+    def get_values(self):
+        return {
+            'num_fracs': self.spin_num_fracs.value(),
+            'min_len': self.spin_min_len.value(),
+            'max_len': self.spin_max_len.value(),
+            'aperture': self.spin_aperture.value(),
+            'perm': self.spin_perm.value()
+        }
+
+
+class HydraulicFracturesPanel(QWidget):
+    """人工裂缝参数面板 - 可复用"""
+    def __init__(self, parent=None, prefix=""):
+        super().__init__(parent)
+        self.prefix = prefix
+        self.init_ui()
+    
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        group = QGroupBox("Hydraulic Fractures (人工裂缝)")
+        group.setStyleSheet(groupbox_style())
+        grid = QGridLayout()
+        
+        self.spin_num_stages = create_spinbox(1, 50, 5)
+        self.spin_half_len = create_double_spinbox(0.0, 10000.0, 100.0, decimals=2)
+        self.spin_height = create_double_spinbox(0.0, 1000.0, 30.0, decimals=2)
+        self.spin_aperture = create_double_spinbox(0.0, 10.0, 0.1, decimals=4)
+        self.spin_perm = create_double_spinbox(0.0, 1000000.0, 1000.0, decimals=2)
+        self.spin_conductivity = create_double_spinbox(0.0, 1000000.0, 100.0, decimals=2)
+        
+        grid.addWidget(QLabel("压裂段数:"), 0, 0)
+        grid.addWidget(self.spin_num_stages, 0, 1)
+        grid.addWidget(QLabel("半缝长 (m):"), 1, 0)
+        grid.addWidget(self.spin_half_len, 1, 1)
+        grid.addWidget(QLabel("缝高 (m):"), 2, 0)
+        grid.addWidget(self.spin_height, 2, 1)
+        grid.addWidget(QLabel("Aperture (m):"), 3, 0)
+        grid.addWidget(self.spin_aperture, 3, 1)
+        grid.addWidget(QLabel("Permeability (D):"), 4, 0)
+        grid.addWidget(self.spin_perm, 4, 1)
+        grid.addWidget(QLabel("Conductivity (D·m):"), 5, 0)
+        grid.addWidget(self.spin_conductivity, 5, 1)
+        
+        group.setLayout(grid)
+        layout.addWidget(group)
+    
+    def get_values(self):
+        return {
+            'num_stages': self.spin_num_stages.value(),
+            'half_len': self.spin_half_len.value(),
+            'height': self.spin_height.value(),
+            'aperture': self.spin_aperture.value(),
+            'perm': self.spin_perm.value(),
+            'conductivity': self.spin_conductivity.value()
+        }
+
+
+class WellParametersPanel(QWidget):
+    """井参数面板 - 可复用"""
+    def __init__(self, parent=None, prefix=""):
+        super().__init__(parent)
+        self.prefix = prefix
+        self.init_ui()
+    
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        group = QGroupBox("Well Parameters")
+        group.setStyleSheet(groupbox_style())
+        grid = QGridLayout()
+        
+        self.spin_well_x = create_double_spinbox(0.0, 100000.0, 500.0, decimals=2)
+        self.spin_well_y = create_double_spinbox(0.0, 100000.0, 250.0, decimals=2)
+        self.spin_well_z = create_double_spinbox(0.0, 10000.0, 50.0, decimals=2)
+        self.spin_well_pressure = create_double_spinbox(0.0, 100000.0, 50.0, decimals=2)
+        self.spin_well_radius = create_double_spinbox(0.001, 100.0, 0.05, decimals=3)
+        self.spin_well_WI = create_double_spinbox(0.0, 1000000.0, 0.0, decimals=2)
+        
+        grid.addWidget(QLabel("X (m):"), 0, 0)
+        grid.addWidget(self.spin_well_x, 0, 1)
+        grid.addWidget(QLabel("Y (m):"), 1, 0)
+        grid.addWidget(self.spin_well_y, 1, 1)
+        grid.addWidget(QLabel("Z (m):"), 2, 0)
+        grid.addWidget(self.spin_well_z, 2, 1)
+        grid.addWidget(QLabel("P_bhp (bar):"), 3, 0)
+        grid.addWidget(self.spin_well_pressure, 3, 1)
+        grid.addWidget(QLabel("Radius (m):"), 4, 0)
+        grid.addWidget(self.spin_well_radius, 4, 1)
+        grid.addWidget(QLabel("WI:"), 5, 0)
+        grid.addWidget(self.spin_well_WI, 5, 1)
+        
+        group.setLayout(grid)
+        layout.addWidget(group)
+    
+    def get_values(self):
+        return {
+            'x': self.spin_well_x.value(),
+            'y': self.spin_well_y.value(),
+            'z': self.spin_well_z.value(),
+            'pressure': self.spin_well_pressure.value(),
+            'radius': self.spin_well_radius.value(),
+            'WI': self.spin_well_WI.value()
+        }
+
+
+class SimulationControlPanel(QWidget):
+    """模拟控制参数面板 - 可复用"""
+    def __init__(self, parent=None, prefix=""):
+        super().__init__(parent)
+        self.prefix = prefix
+        self.init_ui()
+    
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        group = QGroupBox("Simulation Control")
+        group.setStyleSheet(groupbox_style())
+        grid = QGridLayout()
+        
+        self.spin_simulation_time = create_double_spinbox(0.0, 1000000, 100.0, decimals=2)
+        self.spin_time_step = create_double_spinbox(0.0, 1000000, 1.0, decimals=4)
+        
+        grid.addWidget(QLabel("Simulation Time (days):"), 0, 0)
+        grid.addWidget(self.spin_simulation_time, 0, 1)
+        grid.addWidget(QLabel("Time Step (days):"), 1, 0)
+        grid.addWidget(self.spin_time_step, 1, 1)
+        
+        group.setLayout(grid)
+        layout.addWidget(group)
+    
+    def get_values(self):
+        return {
+            'simulation_time': self.spin_simulation_time.value(),
+            'time_step': self.spin_time_step.value()
+        }
+
+
 class ResultsPanel(QWidget):
     """结果显示面板 - 与原文件一致"""
     def __init__(self, parent=None):
