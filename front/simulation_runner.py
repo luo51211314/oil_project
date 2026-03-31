@@ -20,6 +20,9 @@ MODULE_SEARCH_DIRS = [
     os.path.join(PROJECT_ROOT, 'build_nmake'),
     os.path.join(PROJECT_ROOT, 'build_nmake', 'Release'),
     os.path.join(PROJECT_ROOT, 'build_nmake', 'Debug'),
+    os.path.join(PROJECT_ROOT, 'build_vs2022'),
+    os.path.join(PROJECT_ROOT, 'build_vs2022', 'Release'),
+    os.path.join(PROJECT_ROOT, 'build_vs2022', 'Debug'),
 ]
 for module_dir in MODULE_SEARCH_DIRS:
     if os.path.isdir(module_dir) and module_dir not in sys.path:
