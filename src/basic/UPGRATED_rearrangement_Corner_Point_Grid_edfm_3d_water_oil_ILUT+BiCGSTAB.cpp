@@ -1432,6 +1432,23 @@ public:
         hydraulic_z_center_ = z_center;
     }
 
+    void setRegionFractureParameters(int total_fracs,
+                                     double x_min, double x_max,
+                                     double y_min, double y_max,
+                                     double z_min, double z_max) {
+        region_total_fracs_ = total_fracs;
+        region_x_min_ = x_min;
+        region_x_max_ = x_max;
+        region_y_min_ = y_min;
+        region_y_max_ = y_max;
+        region_z_min_ = z_min;
+        region_z_max_ = z_max;
+        std::cout << "DEBUG setRegionFractureParameters: num=" << total_fracs
+                  << ", region=[" << x_min << "," << x_max << "] x ["
+                  << y_min << "," << y_max << "] x ["
+                  << z_min << "," << z_max << "]" << std::endl;
+    }
+
     void setSimulationParameters(double total_time_days) {
         total_time_days_ = total_time_days;
     }
@@ -1507,6 +1524,10 @@ public:
                           natural_max_strike_,
                           natural_aperture_,
                           natural_perm_);
+        generateFracturesInRegion(region_total_fracs_,
+                                  region_x_min_, region_x_max_,
+                                  region_y_min_, region_y_max_,
+                                  region_z_min_, region_z_max_);
         generateHydraulicFractures(hydraulic_total_fracs_,
                                    hydraulic_well_length_,
                                    hydraulic_hf_len_,
@@ -2242,6 +2263,77 @@ public:
                 }
             }
         }
+    }
+
+    void generateFracturesInRegion(int total_fracs,
+                                   double x_min, double x_max,
+                                   double y_min, double y_max,
+                                   double z_min, double z_max) {
+        if (total_fracs <= 0) return;
+
+        int start_id = getNextFractureId();
+
+        std::mt19937 rng(12345);
+        std::uniform_real_distribution<double> distX(x_min, x_max);
+        std::uniform_real_distribution<double> distY(y_min, y_max);
+        std::uniform_real_distribution<double> distZ(z_min, z_max);
+        std::uniform_real_distribution<double> distAngle(natural_min_strike_, natural_max_strike_);
+        std::uniform_real_distribution<double> distDip(0, natural_max_dip_);
+        std::uniform_real_distribution<double> distL(natural_min_L_, natural_max_L_);
+
+        auto inRegion = [&](const Point3& p) -> bool {
+            return (p.x >= x_min && p.x <= x_max &&
+                    p.y >= y_min && p.y <= y_max &&
+                    p.z >= z_min && p.z <= z_max);
+        };
+        auto fracVerticesInRegion = [&](const Fracture& f) -> bool {
+            return inRegion(f.vertices[0]) && inRegion(f.vertices[1]) &&
+                   inRegion(f.vertices[2]) && inRegion(f.vertices[3]);
+        };
+
+        int placed = 0;
+        int tries = 0;
+        const int max_tries = total_fracs * 200000;
+
+        while (placed < total_fracs && tries < max_tries) {
+            tries++;
+
+            Fracture f;
+            f.id = start_id + placed;
+            f.aperture = natural_aperture_;
+            f.perm = natural_perm_;
+            f.is_hydraulic = false;
+
+            Point3 center = {distX(rng), distY(rng), distZ(rng)};
+            double len = distL(rng);
+            double height = distL(rng) * 0.5;
+            double strike = distAngle(rng);
+            double dip = distDip(rng);
+
+            Point3 u = {cos(strike), sin(strike), 0};
+            Point3 n_horiz = {-sin(strike), cos(strike), 0};
+            Point3 v = {n_horiz.x * cos(dip), n_horiz.y * cos(dip), -sin(dip)};
+
+            f.vertices[0] = center - u*(len/2) - v*(height/2);
+            f.vertices[1] = center + u*(len/2) - v*(height/2);
+            f.vertices[2] = center + u*(len/2) + v*(height/2);
+            f.vertices[3] = center - u*(len/2) + v*(height/2);
+
+            if (fracVerticesInRegion(f)) {
+                fractures.push_back(f);
+                placed++;
+            }
+        }
+
+        if (placed < total_fracs) {
+            std::cerr << "Warning: Only placed " << placed << " of " << total_fracs
+                      << " fractures in region. Consider reducing fracture size or enlarging region.\n";
+        }
+
+        std::cout << "Generated " << placed << " fractures in region ["
+                  << x_min << "," << x_max << "] x ["
+                  << y_min << "," << y_max << "] x ["
+                  << z_min << "," << z_max << "]" << std::endl;
     }
 
     void generateHydraulicFractures(int total_fracs = 20,
@@ -3211,6 +3303,14 @@ private:
     double hydraulic_y_center_{-1.0};
     double hydraulic_z_center_{-1.0};
 
+    int region_total_fracs_{0};
+    double region_x_min_{0.0};
+    double region_x_max_{0.0};
+    double region_y_min_{0.0};
+    double region_y_max_{0.0};
+    double region_z_min_{0.0};
+    double region_z_max_{0.0};
+
     double well_radius_{0.05};
     double well_pressure_{50.0};
 
@@ -3239,6 +3339,14 @@ PYBIND11_MODULE(edfm_core_corner, m) {
              py::arg("x_center") = -1.0,
              py::arg("y_center") = -1.0,
              py::arg("z_center") = -1.0)
+        .def("setRegionFractureParameters", &Simulator::setRegionFractureParameters,
+             py::arg("total_fracs"),
+             py::arg("x_min"),
+             py::arg("x_max"),
+             py::arg("y_min"),
+             py::arg("y_max"),
+             py::arg("z_min"),
+             py::arg("z_max"))
         .def("setWellParameters", &Simulator::setWellParameters)
         .def("setSimulationParameters", &Simulator::setSimulationParameters)
         .def("runSimulation", &Simulator::runSimulation)
