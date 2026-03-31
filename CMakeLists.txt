@@ -10,9 +10,9 @@ include(CheckIPOSupported)
 # lxw
 # set(EIGEN3_INCLUDE_DIR "D:/eigen-3.3.8")
 # ypw 
-set(EIGEN3_INCLUDE_DIR "D:/mingw64/eigen")
+# set(EIGEN3_INCLUDE_DIR "D:/mingw64/eigen")
 # wzq
-# set(EIGEN3_INCLUDE_DIR "D:/vtk/vcpkg/installed/x64-windows/include/eigen3")
+set(EIGEN3_INCLUDE_DIR "D:/vtk/vcpkg/installed/x64-windows/include/eigen3")
 
 include_directories(${EIGEN3_INCLUDE_DIR})
 
@@ -20,9 +20,9 @@ include_directories(${EIGEN3_INCLUDE_DIR})
 # lxw
 # set(pybind11_DIR "D:/Anaconda/envs/oil/Lib/site-packages/pybind11/share/cmake/pybind11")
 # ypw
-set(pybind11_DIR "D:/anaconda3/envs/transformers/Lib/site-packages/pybind11/share/cmake/pybind11")
+# set(pybind11_DIR "D:/anaconda3/envs/transformers/Lib/site-packages/pybind11/share/cmake/pybind11")
 # wzq
-# set(pybind11_DIR "D:/pybind11_site/pybind11/share/cmake/pybind11")
+set(pybind11_DIR "D:/pybind11_site/pybind11/share/cmake/pybind11")
 find_package(pybind11 REQUIRED)
 
 # 创建模块 - 包含完整的EDFM算法
@@ -36,6 +36,10 @@ pybind11_add_module(edfm_core_corner
     src/basic/UPGRATED_rearrangement_Corner_Point_Grid_edfm_3d_water_oil_ILUT+BiCGSTAB.cpp
 )
 
+pybind11_add_module(edfm_core_corner_lgr
+    src/lgr/LGR_UPGRATED_rearrangement_Corner_Point_Grid_edfm_3d_water_oil_ILUT+BiCGSTAB.cpp
+)
+
 
 target_include_directories(edfm_core PRIVATE ${EIGEN3_INCLUDE_DIR})
 target_link_libraries(edfm_core PRIVATE pybind11::module)
@@ -43,18 +47,23 @@ target_link_libraries(edfm_core PRIVATE pybind11::module)
 target_include_directories(edfm_core_corner PRIVATE ${EIGEN3_INCLUDE_DIR})
 target_link_libraries(edfm_core_corner PRIVATE pybind11::module)
 
+target_include_directories(edfm_core_corner_lgr PRIVATE ${EIGEN3_INCLUDE_DIR})
+target_link_libraries(edfm_core_corner_lgr PRIVATE pybind11::module)
+target_compile_definitions(edfm_core_corner_lgr PRIVATE EDFM_CORE_CORNER_LGR_PYBIND)
+
 if(MSVC)
     check_ipo_supported(RESULT msipo_supported OUTPUT msipo_error LANGUAGES CXX)
     if(msipo_supported)
         set_property(TARGET edfm_core PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
         set_property(TARGET edfm_core_corner PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+        set_property(TARGET edfm_core_corner_lgr PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
     else()
         message(WARNING "MSVC IPO/LTO is not supported: ${msipo_error}")
     endif()
 
-    foreach(target_name IN ITEMS edfm_core edfm_core_corner)
+    foreach(target_name IN ITEMS edfm_core edfm_core_corner edfm_core_corner_lgr)
         target_compile_options(${target_name} PRIVATE
-            $<$<CONFIG:Release>:/GL /Oi /Ot /Gy /Gw /arch:AVX2>
+            $<$<CONFIG:Release>:/GL /Oi /Ot /Gy /Gw /arch:AVX2 /fp:precise>
         )
         target_link_options(${target_name} PRIVATE
             $<$<CONFIG:Release>:/LTCG /OPT:REF /OPT:ICF>

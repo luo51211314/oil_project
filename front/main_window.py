@@ -148,6 +148,7 @@ class MainWindow(QMainWindow):
         self.current_tab = "Grid"
         self.show_fractures_enabled = False
         self.sim_process = None
+        self.sim_stop_requested = False
         self.sim_output_buffer = ""
         self.pending_result_path = None
         self.step_log_interval = 30
@@ -488,6 +489,28 @@ class MainWindow(QMainWindow):
         """)
         self.run_btn.clicked.connect(self.run_simulation)
         toolbar.addWidget(self.run_btn)
+
+        self.stop_btn = QPushButton("Stop Simulation")
+        self.stop_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #C62828;
+                color: white;
+                padding: 5px 15px;
+                border: none;
+                border-radius: 3px;
+                font-weight: bold;
+            }
+            QPushButton:hover:enabled {
+                background-color: #B71C1C;
+            }
+            QPushButton:disabled {
+                background-color: #6b2b2b;
+                color: #bbbbbb;
+            }
+        """)
+        self.stop_btn.setEnabled(False)
+        self.stop_btn.clicked.connect(self.stop_simulation)
+        toolbar.addWidget(self.stop_btn)
     
     def create_left_panel(self):
         """创建左侧面板 - 与原文件一致"""
@@ -1998,6 +2021,30 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(0)
         self.progress_bar.setFormat("模拟进度 0%  |  运行失败")
 
+    def mark_progress_stopped(self):
+        """标记模拟被用户主动停止。"""
+        self.progress_bar.setFormat(
+            f"模拟进度 {self.progress_bar.value()}%  |  Step {self.current_progress_step}  |  "
+            f"t = {self.format_day_value(self.current_progress_days)} 天  |  已停止"
+        )
+
+    def set_simulation_buttons_running(self, running):
+        """同步 Run/Stop 按钮状态。"""
+        self.run_btn.setEnabled(not running)
+        self.stop_btn.setEnabled(running)
+
+    def stop_simulation(self):
+        """立即停止当前正在运行的模拟。"""
+        if not self.sim_process or self.sim_process.state() == QProcess.NotRunning:
+            return
+
+        self.sim_stop_requested = True
+        self.stop_btn.setEnabled(False)
+        self.append_sim_status("")
+        self.append_sim_status("Stopping simulation...")
+        self.status_bar.showMessage("Stopping simulation...")
+        self.sim_process.kill()
+
     def process_simulation_log_line(self, line):
         """解析子进程日志，更新进度条并节流 Step 日志显示。"""
         sim_time_match = re.match(r"^Simulation time:\s*([0-9eE.+-]+)\s*days$", line)
@@ -2163,7 +2210,8 @@ class MainWindow(QMainWindow):
         self.sim_process.finished.connect(self.handle_simulation_finished)
         self.sim_process.errorOccurred.connect(self.handle_simulation_error)
 
-        self.run_btn.setEnabled(False)
+        self.sim_stop_requested = False
+        self.set_simulation_buttons_running(True)
         self.sim_process.start()
     
     def run_corner_point_grid_simulation(self):
@@ -2363,6 +2411,7 @@ class MainWindow(QMainWindow):
         
         params = {
             'algorithm': 'corner_edfm',
+            'corner_grid_refinement': self.corner_combo_grid_refinement.currentText(),
             'coord_file': self.corner_coord_file_path,
             'zcorn_file': self.corner_zcorn_file_path,
             'num_fracs': natural_frac_params.get('num_fracs', 60),  # 默认60
@@ -2404,18 +2453,29 @@ class MainWindow(QMainWindow):
         self.sim_process.readyReadStandardOutput.connect(self.handle_process_output)
         self.sim_process.finished.connect(self.handle_corner_simulation_finished)
         self.sim_process.errorOccurred.connect(self.handle_simulation_error)
-        
-        self.run_btn.setEnabled(False)
+
+        self.sim_stop_requested = False
+        self.set_simulation_buttons_running(True)
         self.sim_process.start()
     
     def handle_corner_simulation_finished(self, exit_code, exit_status):
         """处理corner模拟完成事件"""
-        self.run_btn.setEnabled(True)
+        self.handle_process_output()
+        self.flush_process_output_buffer()
+        self.set_simulation_buttons_running(False)
+
+        if self.sim_stop_requested:
+            self.append_sim_status("Simulation stopped by user.")
+            self.status_bar.showMessage("Simulation stopped")
+            self.mark_progress_stopped()
+            self.cleanup_simulation_process()
+            return
         
         if exit_code != 0:
             self.append_sim_status(f"Simulation failed with exit code {exit_code}")
             self.status_bar.showMessage("Simulation failed")
             self.mark_progress_failed()
+            self.cleanup_simulation_process()
             return
         
         try:
@@ -2481,6 +2541,7 @@ class MainWindow(QMainWindow):
             self.vtk_renderer.render_corner_wells(self.sim_data)
             self.vtk_renderer.render_corner_fractures(self.sim_data)
             self.update_corner_grid_statistics()
+            self.clear_corner_selection_overlay(clear_params=False)
             
             # 默认显示裂缝，网格和压力场变透明
             if hasattr(self, 'check_show_fractures_corner') and self.check_show_fractures_corner.isChecked():
@@ -2494,6 +2555,8 @@ class MainWindow(QMainWindow):
             self.mark_progress_failed()
             import traceback
             traceback.print_exc()
+        finally:
+            self.cleanup_simulation_process()
     
     def _generate_corner_wells_from_params(self):
         """从Wells页面参数生成井数据"""
@@ -2665,9 +2728,16 @@ class MainWindow(QMainWindow):
         """子进程完成后加载结果并刷新界面。"""
         self.handle_process_output()
         self.flush_process_output_buffer()
-        self.run_btn.setEnabled(True)
+        self.set_simulation_buttons_running(False)
 
         try:
+            if self.sim_stop_requested:
+                self.append_sim_status("")
+                self.append_sim_status("Simulation stopped by user.")
+                self.status_bar.showMessage("Simulation stopped")
+                self.mark_progress_stopped()
+                return
+
             if exit_status != QProcess.NormalExit or exit_code != 0:
                 self.append_sim_status("")
                 self.append_sim_status(f"ERROR: simulation process exited with code {exit_code}")
@@ -2692,20 +2762,25 @@ class MainWindow(QMainWindow):
             self.render_mode3_smooth_pressure()
             self.update_statistics()
             self.append_visualization_summary()
+            self.clear_corner_selection_overlay(clear_params=False)
             self.status_bar.showMessage("Simulation completed")
         finally:
             self.cleanup_simulation_process()
 
     def handle_simulation_error(self, process_error):
         """子进程启动/执行异常时记录错误。"""
+        if self.sim_stop_requested and process_error == QProcess.Crashed:
+            return
+
         if process_error == QProcess.FailedToStart:
             self.append_sim_status("ERROR: failed to start simulation process")
-            self.run_btn.setEnabled(True)
+            self.set_simulation_buttons_running(False)
             self.mark_progress_failed()
             self.cleanup_simulation_process()
         elif process_error == QProcess.Crashed:
             self.append_sim_status("ERROR: simulation process crashed")
             self.mark_progress_failed()
+            self.set_simulation_buttons_running(False)
         self.status_bar.showMessage("Simulation failed")
 
     def cleanup_simulation_process(self):
@@ -2717,6 +2792,7 @@ class MainWindow(QMainWindow):
                 pass
         self.pending_result_path = None
         self.sim_output_buffer = ""
+        self.sim_stop_requested = False
         if self.sim_process is not None:
             self.sim_process.deleteLater()
             self.sim_process = None

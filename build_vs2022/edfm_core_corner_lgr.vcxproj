@@ -22,11 +22,11 @@
     </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
-    <ProjectGuid>{9C7233D7-1FA9-3DB7-A7A4-BE5758F3FED1}</ProjectGuid>
+    <ProjectGuid>{1202CF67-0380-3CA5-BD7D-EABB5F35505F}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
     <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
     <Platform>x64</Platform>
-    <ProjectName>edfm_core</ProjectName>
+    <ProjectName>edfm_core_corner_lgr</ProjectName>
     <VCProjectUpgraderObjectName>NoUpgrade</VCProjectUpgraderObjectName>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -61,26 +61,26 @@
   <PropertyGroup>
     <_ProjectFileVersion>10.0.20506.1</_ProjectFileVersion>
     <OutDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\oil_project\oil_project\build_vs2022\Debug\</OutDir>
-    <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">edfm_core.dir\Debug\</IntDir>
-    <TargetName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">edfm_core.cp313-win_amd64</TargetName>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">edfm_core_corner_lgr.dir\Debug\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">edfm_core_corner_lgr.cp313-win_amd64</TargetName>
     <TargetExt Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">.pyd</TargetExt>
     <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</LinkIncremental>
     <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</GenerateManifest>
     <OutDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\oil_project\oil_project\build_vs2022\Release\</OutDir>
-    <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">edfm_core.dir\Release\</IntDir>
-    <TargetName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">edfm_core.cp313-win_amd64</TargetName>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">edfm_core_corner_lgr.dir\Release\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">edfm_core_corner_lgr.cp313-win_amd64</TargetName>
     <TargetExt Condition="'$(Configuration)|$(Platform)'=='Release|x64'">.pyd</TargetExt>
     <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Release|x64'"></LinkIncremental>
     <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</GenerateManifest>
     <OutDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\oil_project\oil_project\build_vs2022\MinSizeRel\</OutDir>
-    <IntDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">edfm_core.dir\MinSizeRel\</IntDir>
-    <TargetName Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">edfm_core.cp313-win_amd64</TargetName>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">edfm_core_corner_lgr.dir\MinSizeRel\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">edfm_core_corner_lgr.cp313-win_amd64</TargetName>
     <TargetExt Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">.pyd</TargetExt>
     <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkIncremental>
     <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">true</GenerateManifest>
     <OutDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\oil_project\oil_project\build_vs2022\RelWithDebInfo\</OutDir>
-    <IntDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">edfm_core.dir\RelWithDebInfo\</IntDir>
-    <TargetName Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">edfm_core.cp313-win_amd64</TargetName>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">edfm_core_corner_lgr.dir\RelWithDebInfo\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">edfm_core_corner_lgr.cp313-win_amd64</TargetName>
     <TargetExt Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">.pyd</TargetExt>
     <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">true</LinkIncremental>
     <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">true</GenerateManifest>
@@ -103,12 +103,12 @@
       <RuntimeTypeInfo>true</RuntimeTypeInfo>
       <SupportJustMyCode></SupportJustMyCode>
       <UseFullPaths>false</UseFullPaths>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;CMAKE_INTDIR="Debug";edfm_core_EXPORTS</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;EDFM_CORE_CORNER_LGR_PYBIND;CMAKE_INTDIR="Debug";edfm_core_corner_lgr_EXPORTS</PreprocessorDefinitions>
       <ObjectFileName>$(IntDir)</ObjectFileName>
       <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
     </ClCompile>
     <ResourceCompile>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_DEBUG;_WINDOWS;CMAKE_INTDIR=\"Debug\";edfm_core_EXPORTS</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_DEBUG;_WINDOWS;EDFM_CORE_CORNER_LGR_PYBIND;CMAKE_INTDIR=\"Debug\";edfm_core_corner_lgr_EXPORTS</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>D:\vtk\vcpkg\installed\x64-windows\include\eigen3;D:\pybind11_site\pybind11\include;D:\anaconda\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
@@ -125,8 +125,8 @@
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
-      <ImportLibrary>D:/oil_project/oil_project/build_vs2022/Debug/edfm_core.lib</ImportLibrary>
-      <ProgramDataBaseFile>D:/oil_project/oil_project/build_vs2022/Debug/edfm_core.pdb</ProgramDataBaseFile>
+      <ImportLibrary>D:/oil_project/oil_project/build_vs2022/Debug/edfm_core_corner_lgr.lib</ImportLibrary>
+      <ProgramDataBaseFile>D:/oil_project/oil_project/build_vs2022/Debug/edfm_core_corner_lgr.pdb</ProgramDataBaseFile>
       <SubSystem>Console</SubSystem>
     </Link>
     <ProjectReference>
@@ -157,14 +157,14 @@
       <SupportJustMyCode></SupportJustMyCode>
       <UseFullPaths>false</UseFullPaths>
       <WholeProgramOptimization>true</WholeProgramOptimization>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;CMAKE_INTDIR="Release";edfm_core_EXPORTS</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;EDFM_CORE_CORNER_LGR_PYBIND;CMAKE_INTDIR="Release";edfm_core_corner_lgr_EXPORTS</PreprocessorDefinitions>
       <ObjectFileName>$(IntDir)</ObjectFileName>
       <DebugInformationFormat>
       </DebugInformationFormat>
       <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
     </ClCompile>
     <ResourceCompile>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;CMAKE_INTDIR=\"Release\";edfm_core_EXPORTS</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;EDFM_CORE_CORNER_LGR_PYBIND;CMAKE_INTDIR=\"Release\";edfm_core_corner_lgr_EXPORTS</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>D:\vtk\vcpkg\installed\x64-windows\include\eigen3;D:\pybind11_site\pybind11\include;D:\anaconda\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
@@ -182,10 +182,10 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <GenerateDebugInformation>false</GenerateDebugInformation>
       <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
-      <ImportLibrary>D:/oil_project/oil_project/build_vs2022/Release/edfm_core.lib</ImportLibrary>
+      <ImportLibrary>D:/oil_project/oil_project/build_vs2022/Release/edfm_core_corner_lgr.lib</ImportLibrary>
       <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
       <OptimizeReferences>true</OptimizeReferences>
-      <ProgramDataBaseFile>D:/oil_project/oil_project/build_vs2022/Release/edfm_core.pdb</ProgramDataBaseFile>
+      <ProgramDataBaseFile>D:/oil_project/oil_project/build_vs2022/Release/edfm_core_corner_lgr.pdb</ProgramDataBaseFile>
       <SubSystem>Console</SubSystem>
     </Link>
     <ProjectReference>
@@ -211,14 +211,14 @@
       <SupportJustMyCode></SupportJustMyCode>
       <UseFullPaths>false</UseFullPaths>
       <WholeProgramOptimization>true</WholeProgramOptimization>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;CMAKE_INTDIR="MinSizeRel";edfm_core_EXPORTS</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;EDFM_CORE_CORNER_LGR_PYBIND;CMAKE_INTDIR="MinSizeRel";edfm_core_corner_lgr_EXPORTS</PreprocessorDefinitions>
       <ObjectFileName>$(IntDir)</ObjectFileName>
       <DebugInformationFormat>
       </DebugInformationFormat>
       <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
     </ClCompile>
     <ResourceCompile>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;CMAKE_INTDIR=\"MinSizeRel\";edfm_core_EXPORTS</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;EDFM_CORE_CORNER_LGR_PYBIND;CMAKE_INTDIR=\"MinSizeRel\";edfm_core_corner_lgr_EXPORTS</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>D:\vtk\vcpkg\installed\x64-windows\include\eigen3;D:\pybind11_site\pybind11\include;D:\anaconda\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
@@ -235,9 +235,9 @@
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <GenerateDebugInformation>false</GenerateDebugInformation>
       <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
-      <ImportLibrary>D:/oil_project/oil_project/build_vs2022/MinSizeRel/edfm_core.lib</ImportLibrary>
+      <ImportLibrary>D:/oil_project/oil_project/build_vs2022/MinSizeRel/edfm_core_corner_lgr.lib</ImportLibrary>
       <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
-      <ProgramDataBaseFile>D:/oil_project/oil_project/build_vs2022/MinSizeRel/edfm_core.pdb</ProgramDataBaseFile>
+      <ProgramDataBaseFile>D:/oil_project/oil_project/build_vs2022/MinSizeRel/edfm_core_corner_lgr.pdb</ProgramDataBaseFile>
       <SubSystem>Console</SubSystem>
     </Link>
     <ProjectReference>
@@ -263,12 +263,12 @@
       <RuntimeTypeInfo>true</RuntimeTypeInfo>
       <SupportJustMyCode></SupportJustMyCode>
       <UseFullPaths>false</UseFullPaths>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;CMAKE_INTDIR="RelWithDebInfo";edfm_core_EXPORTS</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;EDFM_CORE_CORNER_LGR_PYBIND;CMAKE_INTDIR="RelWithDebInfo";edfm_core_corner_lgr_EXPORTS</PreprocessorDefinitions>
       <ObjectFileName>$(IntDir)</ObjectFileName>
       <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
     </ClCompile>
     <ResourceCompile>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;CMAKE_INTDIR=\"RelWithDebInfo\";edfm_core_EXPORTS</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;EDFM_CORE_CORNER_LGR_PYBIND;CMAKE_INTDIR=\"RelWithDebInfo\";edfm_core_corner_lgr_EXPORTS</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>D:\vtk\vcpkg\installed\x64-windows\include\eigen3;D:\pybind11_site\pybind11\include;D:\anaconda\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
@@ -285,8 +285,8 @@
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
-      <ImportLibrary>D:/oil_project/oil_project/build_vs2022/RelWithDebInfo/edfm_core.lib</ImportLibrary>
-      <ProgramDataBaseFile>D:/oil_project/oil_project/build_vs2022/RelWithDebInfo/edfm_core.pdb</ProgramDataBaseFile>
+      <ImportLibrary>D:/oil_project/oil_project/build_vs2022/RelWithDebInfo/edfm_core_corner_lgr.lib</ImportLibrary>
+      <ProgramDataBaseFile>D:/oil_project/oil_project/build_vs2022/RelWithDebInfo/edfm_core_corner_lgr.pdb</ProgramDataBaseFile>
       <SubSystem>Console</SubSystem>
     </Link>
     <ProjectReference>
@@ -351,7 +351,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     </CustomBuild>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="D:\oil_project\oil_project\src\lgr\edfm_3d_blackoil_lgr.cpp" />
+    <ClCompile Include="D:\oil_project\oil_project\src\lgr\LGR_UPGRATED_rearrangement_Corner_Point_Grid_edfm_3d_water_oil_ILUT+BiCGSTAB.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="D:\oil_project\oil_project\build_vs2022\ZERO_CHECK.vcxproj">
