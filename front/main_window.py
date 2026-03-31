@@ -1746,6 +1746,11 @@ class MainWindow(QMainWindow):
         
         self.sim_data.fractures = fractures
         self.vtk_renderer.render_corner_fractures(self.sim_data)
+        
+        # 如果CheckBox是勾选的，立即应用显示（网格和压力场变透明）
+        if hasattr(self, 'check_show_fractures_corner') and self.check_show_fractures_corner.isChecked():
+            self.toggle_corner_fractures_visibility(Qt.Checked)
+        
         self.status_bar.showMessage(f"绘制了 {num_fracs} 个裂缝")
 
     def hide_corner_fractures(self):
@@ -2476,6 +2481,10 @@ class MainWindow(QMainWindow):
             self.vtk_renderer.render_corner_wells(self.sim_data)
             self.vtk_renderer.render_corner_fractures(self.sim_data)
             self.update_corner_grid_statistics()
+            
+            # 默认显示裂缝，网格和压力场变透明
+            if hasattr(self, 'check_show_fractures_corner') and self.check_show_fractures_corner.isChecked():
+                self.toggle_corner_fractures_visibility(Qt.Checked)
             
             self.status_bar.showMessage("Corner Point Grid simulation completed")
             
