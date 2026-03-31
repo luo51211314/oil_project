@@ -1469,6 +1469,25 @@ public:
         return result;
     }
 
+    py::array_t<double> getCellGeometryWithPressure() const {
+        py::array_t<double> result(std::vector<py::ssize_t>{static_cast<py::ssize_t>(n_matrix), 29});
+        auto r = result.mutable_unchecked<2>();
+        for (int i = 0; i < n_matrix; ++i) {
+            const auto& c = cells[i];
+            r(i, 0) = static_cast<double>(c.id);
+            r(i, 1) = static_cast<double>(c.ix);
+            r(i, 2) = static_cast<double>(c.iy);
+            r(i, 3) = static_cast<double>(c.iz);
+            for (int j = 0; j < 8; ++j) {
+                r(i, 4 + j*3 + 0) = c.corners[j].x;
+                r(i, 4 + j*3 + 1) = c.corners[j].y;
+                r(i, 4 + j*3 + 2) = c.corners[j].z;
+            }
+            r(i, 28) = states[i].P;
+        }
+        return result;
+    }
+
     SimulationResult runSimulation() {
         if (coord_file_.empty() || zcorn_file_.empty()) {
             throw std::runtime_error("Corner-point input files are not set. Call setCornerPointFiles(coord, zcorn) first.");
@@ -3224,5 +3243,6 @@ PYBIND11_MODULE(edfm_core_corner, m) {
         .def("setSimulationParameters", &Simulator::setSimulationParameters)
         .def("runSimulation", &Simulator::runSimulation)
         .def("getPressureData", &Simulator::getPressureData)
-        .def("getFractureVertices", &Simulator::getFractureVertices);
+        .def("getFractureVertices", &Simulator::getFractureVertices)
+        .def("getCellGeometryWithPressure", &Simulator::getCellGeometryWithPressure);
 }

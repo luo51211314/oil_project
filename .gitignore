@@ -76,3 +76,6 @@ Desktop.ini
 # Backup files
 *.bak
 *.backup
+
+# Build configuration (user-specific)
+CMakeLists.txt

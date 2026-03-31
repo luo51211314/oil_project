@@ -210,6 +210,8 @@ def run_corner_edfm_simulation(params):
     zcorn_file = params.get('zcorn_file', '')
     if not coord_file or not zcorn_file:
         raise ValueError("Corner EDFM requires both COORD and ZCORN files")
+    
+    # 注意：不再在子进程中加载corner_point_grid，主进程中已经加载了
 
     sim = edfm_core_corner.EDFMSimulator()
     sim.setCornerPointFiles(coord_file, zcorn_file)
@@ -241,12 +243,23 @@ def run_corner_edfm_simulation(params):
     sim.setSimulationParameters(float(params.get('simulation_time', 100.0)))
 
     result = sim.runSimulation()
+    
+    print("Getting cell geometry with pressure...")
+    cell_geometry = sim.getCellGeometryWithPressure()
+    
+    print("Getting fracture vertices...")
+    try:
+        fracture_vertices = sim.getFractureVertices()
+    except:
+        fracture_vertices = None
+    
     nx, ny, nz, lx, ly, lz = load_corner_grid_info(coord_file, zcorn_file)
 
     sim_data = SimulationData()
     sim_data.generate_from_cpp(result, nx, ny, nz, lx, ly, lz, [], [])
-    if not sim_data.interpolated_pressure:
-        sim_data.interpolated_pressure = build_interpolated_pressure_from_leaf_data(sim_data)
+    sim_data.cell_geometry_with_pressure = cell_geometry
+    
+    # 插值由C++算法完成，不再在Python中做插值
     return sim_data
 
 
