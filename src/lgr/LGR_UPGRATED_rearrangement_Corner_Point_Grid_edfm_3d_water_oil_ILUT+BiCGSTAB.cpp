@@ -17,6 +17,10 @@
 #include <vector>
 #include <algorithm>
 
+#include <pybind11/pybind11.h>
+#include <pybind11/numpy.h>
+#include <pybind11/stl.h>
+
 #include <Eigen/Sparse>
 #include <Eigen/Dense>
 #include <Eigen/SparseLU>
@@ -25,6 +29,7 @@
 
 using namespace std;
 using namespace Eigen;
+namespace py = pybind11;
 
 static constexpr double EPS = 1e-12;
 static constexpr double PI  = 3.14159265358979323846;
@@ -127,7 +132,7 @@ static bool parseDoubleStrict(const std::string& s, double& v) {
 
 static bool isTopMarker(const std::string& s) {
     std::string t = trim(s);
-    if (t == "顶") return true;
+    if (t == "\xE9\xA1\xB6") return true; // UTF-8 for "顶"
     std::string low = t;
     for (char& ch : low) ch = (char)std::tolower((unsigned char)ch);
     return low == "top";
@@ -135,7 +140,7 @@ static bool isTopMarker(const std::string& s) {
 
 static bool isBottomMarker(const std::string& s) {
     std::string t = trim(s);
-    if (t == "底") return true;
+    if (t == "\xE5\xBA\x95") return true; // UTF-8 for "底"
     std::string low = t;
     for (char& ch : low) ch = (char)std::tolower((unsigned char)ch);
     return low == "bottom";
@@ -1002,6 +1007,14 @@ PropertiesT<T> getProps(const StateT<T>& s) {
     return p;
 }
 
+struct SimulationResult {
+    py::array_t<double> pressure_field;
+    py::array_t<double> temperature_field;
+    py::array_t<double> stress_field;
+    py::array_t<double> fracture_vertices;
+    py::array_t<double> fracture_cells;
+};
+
 class SimulatorLGR {
 public:
     int Nx{150}, Ny{15}, Nz{2};
@@ -1009,7 +1022,7 @@ public:
     double dx{}, dy{}, dz{};
 
     bool enable_lgr{true};
-    double d_threshold{20.0};
+    double d_threshold{5.0};
     uint16_t lgr_Nrx{2}, lgr_Nry{2}, lgr_Nrz{2};
     int dbar_nsx{4}, dbar_nsy{4}, dbar_nsz{4};
     double eps_area_factor{1e-8};
@@ -1045,10 +1058,137 @@ public:
     std::vector<CellOffsets> cell_J_idx;
     std::vector<ConnOffsets> conn_J_idx;
 
+    std::string coord_file_path{"COORD.csv"};
+    std::string zcorn_file_path{"ZCORN.csv"};
+    int natural_frac_count{30};
+    double natural_min_length{30.0};
+    double natural_max_length{80.0};
+    double natural_max_dip{PI / 3.0};
+    double natural_min_strike{0.0};
+    double natural_max_strike{PI};
+    double natural_aperture{0.01};
+    double natural_perm{1000.0};
+    bool use_region_fractures{false};
+    double region_x_min{0.0};
+    double region_x_max{-1.0};
+    double region_y_min{0.0};
+    double region_y_max{-1.0};
+    double region_z_min{0.0};
+    double region_z_max{-1.0};
+    int hydraulic_frac_count{20};
+    double hydraulic_well_length{2000.0};
+    double hydraulic_half_length{120.0};
+    double hydraulic_height{30.0};
+    double hydraulic_aperture{0.1};
+    double hydraulic_perm{1000.0};
+    double hydraulic_center_x{-1.0};
+    double hydraulic_center_y{-1.0};
+    double hydraulic_center_z{-1.0};
+    double well_radius{0.05};
+    double well_pressure{50.0};
+    double initial_pressure{800.0};
+    double initial_sw{0.05};
+    double initial_sg{0.9};
+    double simulation_total_days{100.0};
+
     SimulatorLGR() {
         dx = Lx / Nx;
         dy = Ly / Ny;
         dz = Lz / Nz;
+    }
+
+    void setCornerPointFiles(const std::string& coord_file, const std::string& zcorn_file) {
+        coord_file_path = coord_file;
+        zcorn_file_path = zcorn_file;
+    }
+
+    void setFractureParameters(int total_fracs,
+                               double min_L,
+                               double max_L,
+                               double max_dip,
+                               double min_strike,
+                               double max_strike,
+                               double aperture_val,
+                               double perm_val) {
+        natural_frac_count = total_fracs;
+        natural_min_length = min_L;
+        natural_max_length = max_L;
+        natural_max_dip = max_dip;
+        natural_min_strike = min_strike;
+        natural_max_strike = max_strike;
+        natural_aperture = aperture_val;
+        natural_perm = perm_val;
+        use_region_fractures = false;
+        region_x_min = 0.0;
+        region_x_max = -1.0;
+        region_y_min = 0.0;
+        region_y_max = -1.0;
+        region_z_min = 0.0;
+        region_z_max = -1.0;
+    }
+
+    void setRegionFractureParameters(int total_fracs,
+                                     double x_min,
+                                     double x_max,
+                                     double y_min,
+                                     double y_max,
+                                     double z_min,
+                                     double z_max) {
+        natural_frac_count = total_fracs;
+        use_region_fractures = true;
+        region_x_min = x_min;
+        region_x_max = x_max;
+        region_y_min = y_min;
+        region_y_max = y_max;
+        region_z_min = z_min;
+        region_z_max = z_max;
+    }
+
+    void setHydraulicFractureParameters(int total_fracs,
+                                        double well_length,
+                                        double hf_len,
+                                        double hf_height,
+                                        double aperture_val,
+                                        double perm_val,
+                                        double x_center = -1.0,
+                                        double y_center = -1.0,
+                                        double z_center = -1.0) {
+        hydraulic_frac_count = total_fracs;
+        hydraulic_well_length = well_length;
+        hydraulic_half_length = hf_len;
+        hydraulic_height = hf_height;
+        hydraulic_aperture = aperture_val;
+        hydraulic_perm = perm_val;
+        hydraulic_center_x = x_center;
+        hydraulic_center_y = y_center;
+        hydraulic_center_z = z_center;
+    }
+
+    void setWellParameters(double rw, double pressure) {
+        well_radius = rw;
+        well_pressure = pressure;
+    }
+
+    void setInitialStateParameters(double pressure, double sw, double sg) {
+        initial_pressure = pressure;
+        initial_sw = sw;
+        initial_sg = sg;
+    }
+
+    void setSimulationParameters(double total_days) {
+        simulation_total_days = total_days;
+    }
+
+    void setLGRParameters(bool enabled,
+                          double threshold,
+                          int nrx,
+                          int nry,
+                          int nrz) {
+        enable_lgr = enabled;
+        d_threshold = threshold;
+        lgr_Nrx = static_cast<uint16_t>(std::max(1, nrx));
+        lgr_Nry = static_cast<uint16_t>(std::max(1, nry));
+        lgr_Nrz = static_cast<uint16_t>(std::max(1, nrz));
     }
 
     int getNextFractureId() const {
@@ -1756,7 +1896,7 @@ public:
         std::cout << "Parent corner-point grid built: n_parent = " << n_parent << std::endl;
     }
 
-    void generateFractures(int total_fracs = 30,
+    void generateFractures(int total_fracs = 10,
                            double min_L = 30.0, double max_L = 80.0,
                            double max_dip = PI/3.0,
                            double min_strike = 0.0, double max_strike = PI,
@@ -1818,7 +1958,7 @@ public:
     }
 
     void generateHydraulicFractures(int total_fracs = 20,
-                                    double well_length = 2000,
+                                    double well_length = 600,
                                     double hf_len = 120.0,
                                     double hf_height = 30.0,
                                     double aperture_val = 0.1,
@@ -2244,7 +2384,7 @@ public:
             }
 
             if (best_s >= 0) {
-                double rw = 0.05;
+                double rw = well_radius;
                 double re = computeSegmentEquivalentRadius(segments[best_s], rw);
                 double kf = segments[best_s].perm;
                 double b  = segments[best_s].aperture;
@@ -2254,7 +2394,7 @@ public:
                 Well w;
                 w.target_node_idx = n_leaf + best_s;
                 w.WI = 2.0 * PI * kf * b / denom;
-                w.P_bhp = 50.0;
+                w.P_bhp = well_pressure;
                 if (!std::isfinite(w.WI) || w.WI <= EPS) continue;
 
                 int idx = (int)wells.size();
@@ -2269,11 +2409,77 @@ public:
         states.assign(n_total, {});
         states_prev = states;
         for (int i=0; i<n_total; ++i) {
-            states[i].P = 800.0;
-            states[i].Sw = 0.05;
-            states[i].Sg = 0.9;
+            states[i].P = initial_pressure;
+            states[i].Sw = initial_sw;
+            states[i].Sg = initial_sg;
         }
         states_prev = states;
+    }
+
+    py::array_t<double> getPressureData() const {
+        py::array_t<double> result(std::vector<py::ssize_t>{static_cast<py::ssize_t>(n_leaf), 4});
+        auto r = result.mutable_unchecked<2>();
+        for (int i = 0; i < n_leaf; ++i) {
+            r(i, 0) = leaves[i].center.x;
+            r(i, 1) = leaves[i].center.y;
+            r(i, 2) = leaves[i].center.z;
+            r(i, 3) = states[i].P;
+        }
+        return result;
+    }
+
+    py::array_t<double> getFractureVertices() const {
+        py::array_t<double> result(std::vector<py::ssize_t>{static_cast<py::ssize_t>(fractures.size()) * 4, 4});
+        auto r = result.mutable_unchecked<2>();
+        py::ssize_t row = 0;
+        for (const auto& f : fractures) {
+            for (int i = 0; i < 4; ++i) {
+                r(row, 0) = f.vertices[i].x;
+                r(row, 1) = f.vertices[i].y;
+                r(row, 2) = f.vertices[i].z;
+                r(row, 3) = static_cast<double>(f.id);
+                ++row;
+            }
+        }
+        return result;
+    }
+
+    py::array_t<double> getCellGeometryWithPressure() const {
+        py::array_t<double> result(std::vector<py::ssize_t>{static_cast<py::ssize_t>(n_leaf), 29});
+        auto r = result.mutable_unchecked<2>();
+        for (int i = 0; i < n_leaf; ++i) {
+            const auto& c = leaves[i];
+            r(i, 0) = static_cast<double>(c.leaf_id);
+            r(i, 1) = static_cast<double>(c.parent_id);
+            r(i, 2) = static_cast<double>(c.lix);
+            r(i, 3) = static_cast<double>(c.liy);
+            for (int j = 0; j < 8; ++j) {
+                r(i, 4 + j*3 + 0) = c.corners[j].x;
+                r(i, 4 + j*3 + 1) = c.corners[j].y;
+                r(i, 4 + j*3 + 2) = c.corners[j].z;
+            }
+            r(i, 28) = states[i].P;
+        }
+        return result;
+    }
+
+    SimulationResult runSimulation() {
+        if (coord_file_path.empty() || zcorn_file_path.empty()) {
+            throw std::runtime_error("Corner-point input files are not set. Call setCornerPointFiles(coord, zcorn) first.");
+        }
+
+        std::cout << "Preprocessing (corner-point CSV parent grid + LGR + EDFM)..." << std::endl;
+        if (!preprocess()) {
+            throw std::runtime_error("Preprocess failed.");
+        }
+
+        std::cout << "Running simulation..." << std::endl;
+        run(simulation_total_days);
+
+        SimulationResult result;
+        result.pressure_field = getPressureData();
+        result.fracture_vertices = getFractureVertices();
+        return result;
     }
 
     void buildJacobianPattern() {
@@ -2813,10 +3019,34 @@ public:
     }
 
     bool preprocess() {
-        // 为了兼容 corner-point CSV 输入而做的最小改动：默认从 COORD.csv + ZCORN.csv 构造 parent grid
-        if (!buildParentGridFromCornerPointCSV("COORD.csv", "ZCORN.csv")) return false;
-        generateFractures();
-        generateHydraulicFractures();
+        if (!buildParentGridFromCornerPointCSV(coord_file_path, zcorn_file_path)) return false;
+        generateFractures(
+            natural_frac_count,
+            natural_min_length,
+            natural_max_length,
+            natural_max_dip,
+            natural_min_strike,
+            natural_max_strike,
+            natural_aperture,
+            natural_perm,
+            use_region_fractures ? region_x_min : 0.0,
+            use_region_fractures ? region_x_max : -1.0,
+            use_region_fractures ? region_y_min : 0.0,
+            use_region_fractures ? region_y_max : -1.0,
+            use_region_fractures ? region_z_min : 0.0,
+            use_region_fractures ? region_z_max : -1.0
+        );
+        generateHydraulicFractures(
+            hydraulic_frac_count,
+            hydraulic_well_length,
+            hydraulic_half_length,
+            hydraulic_height,
+            hydraulic_aperture,
+            hydraulic_perm,
+            hydraulic_center_x,
+            hydraulic_center_y,
+            hydraulic_center_z
+        );
         markRefinement();
         buildLeafGrid();
         buildParentFaceCoverage();
@@ -2836,8 +3066,10 @@ public:
     }
 };
 
+#ifndef EDFM_CORE_CORNER_LGR_PYBIND
 int main() {
     SimulatorLGR sim;
+    sim.setCornerPointFiles("COORD.csv", "ZCORN.csv");
     std::cout << "Preprocessing (corner-point CSV parent grid + LGR + EDFM)..." << std::endl;
     if (!sim.preprocess()) {
         std::cerr << "Preprocess failed." << std::endl;
@@ -2854,4 +3086,38 @@ int main() {
 
     std::cout << "Done. Outputs saved." << std::endl;
     return 0;
+}
+#endif
+
+PYBIND11_MODULE(edfm_core_corner_lgr, m) {
+    py::class_<SimulationResult>(m, "SimulationResult")
+        .def_readwrite("pressure_field", &SimulationResult::pressure_field)
+        .def_readwrite("temperature_field", &SimulationResult::temperature_field)
+        .def_readwrite("stress_field", &SimulationResult::stress_field)
+        .def_readwrite("fracture_vertices", &SimulationResult::fracture_vertices)
+        .def_readwrite("fracture_cells", &SimulationResult::fracture_cells);
+
+    py::class_<SimulatorLGR>(m, "EDFMSimulator")
+        .def(py::init<>())
+        .def("setCornerPointFiles", &SimulatorLGR::setCornerPointFiles)
+        .def("setFractureParameters", &SimulatorLGR::setFractureParameters)
+        .def("setRegionFractureParameters", &SimulatorLGR::setRegionFractureParameters)
+        .def("setHydraulicFractureParameters", &SimulatorLGR::setHydraulicFractureParameters,
+             py::arg("total_fracs"),
+             py::arg("well_length"),
+             py::arg("hf_len"),
+             py::arg("hf_height"),
+             py::arg("aperture_val"),
+             py::arg("perm_val"),
+             py::arg("x_center") = -1.0,
+             py::arg("y_center") = -1.0,
+             py::arg("z_center") = -1.0)
+        .def("setWellParameters", &SimulatorLGR::setWellParameters)
+        .def("setInitialStateParameters", &SimulatorLGR::setInitialStateParameters)
+        .def("setSimulationParameters", &SimulatorLGR::setSimulationParameters)
+        .def("setLGRParameters", &SimulatorLGR::setLGRParameters)
+        .def("runSimulation", &SimulatorLGR::runSimulation)
+        .def("getPressureData", &SimulatorLGR::getPressureData)
+        .def("getFractureVertices", &SimulatorLGR::getFractureVertices)
+        .def("getCellGeometryWithPressure", &SimulatorLGR::getCellGeometryWithPressure);
 }

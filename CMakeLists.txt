@@ -34,6 +34,9 @@ pybind11_add_module(edfm_core_corner
     src/basic/UPGRATED_rearrangement_Corner_Point_Grid_edfm_3d_water_oil_ILUT+BiCGSTAB.cpp
 )
 
+pybind11_add_module(edfm_core_corner_lgr
+    src/lgr/LGR_UPGRATED_rearrangement_Corner_Point_Grid_edfm_3d_water_oil_ILUT+BiCGSTAB.cpp
+)
 
 target_include_directories(edfm_core PRIVATE ${EIGEN3_INCLUDE_DIR})
 target_link_libraries(edfm_core PRIVATE pybind11::module)
@@ -41,3 +44,5 @@ target_link_libraries(edfm_core PRIVATE pybind11::module)
 target_include_directories(edfm_core_corner PRIVATE ${EIGEN3_INCLUDE_DIR})
 target_link_libraries(edfm_core_corner PRIVATE pybind11::module)
 
+target_include_directories(edfm_core_corner_lgr PRIVATE ${EIGEN3_INCLUDE_DIR})
+target_link_libraries(edfm_core_corner_lgr PRIVATE pybind11::module)

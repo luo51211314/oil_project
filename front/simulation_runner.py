@@ -20,6 +20,9 @@ MODULE_SEARCH_DIRS = [
     os.path.join(PROJECT_ROOT, 'build_nmake'),
     os.path.join(PROJECT_ROOT, 'build_nmake', 'Release'),
     os.path.join(PROJECT_ROOT, 'build_nmake', 'Debug'),
+    os.path.join(PROJECT_ROOT, 'build_vs2022'),
+    os.path.join(PROJECT_ROOT, 'build_vs2022', 'Release'),
+    os.path.join(PROJECT_ROOT, 'build_vs2022', 'Debug'),
 ]
 for module_dir in MODULE_SEARCH_DIRS:
     if os.path.isdir(module_dir) and module_dir not in sys.path:
@@ -29,6 +32,8 @@ _BLACK_OIL_MODULE = None
 _BLACK_OIL_IMPORT_ERROR = None
 _CORNER_EDFM_MODULE = None
 _CORNER_EDFM_IMPORT_ERROR = None
+_CORNER_EDFM_LGR_MODULE = None
+_CORNER_EDFM_LGR_IMPORT_ERROR = None
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(line_buffering=True, write_through=True)
@@ -74,6 +79,22 @@ def load_corner_edfm_module():
     except Exception as exc:
         _CORNER_EDFM_IMPORT_ERROR = exc
         raise RuntimeError(f"edfm_core_corner module is not available: {exc}") from exc
+
+
+def load_corner_edfm_lgr_module():
+    """按需加载 Corner EDFM LGR C++ 模块。"""
+    global _CORNER_EDFM_LGR_MODULE, _CORNER_EDFM_LGR_IMPORT_ERROR
+    if _CORNER_EDFM_LGR_MODULE is not None:
+        return _CORNER_EDFM_LGR_MODULE
+    if _CORNER_EDFM_LGR_IMPORT_ERROR is not None:
+        raise RuntimeError(f"edfm_core_corner_lgr module is not available: {_CORNER_EDFM_LGR_IMPORT_ERROR}")
+
+    try:
+        _CORNER_EDFM_LGR_MODULE = importlib.import_module('edfm_core_corner_lgr')
+        return _CORNER_EDFM_LGR_MODULE
+    except Exception as exc:
+        _CORNER_EDFM_LGR_IMPORT_ERROR = exc
+        raise RuntimeError(f"edfm_core_corner_lgr module is not available: {exc}") from exc
 
 
 def run_black_oil_simulation(params):
@@ -204,7 +225,9 @@ def load_corner_grid_info(coord_file, zcorn_file):
 
 def run_corner_edfm_simulation(params):
     """执行 Corner EDFM 模拟并返回 SimulationData。"""
-    edfm_core_corner = load_corner_edfm_module()
+    refinement_mode = params.get('corner_grid_refinement', '不加密')
+    use_lgr_module = refinement_mode == '加密'
+    edfm_core_corner = load_corner_edfm_lgr_module() if use_lgr_module else load_corner_edfm_module()
 
     coord_file = params.get('coord_file', '')
     zcorn_file = params.get('zcorn_file', '')
@@ -240,6 +263,20 @@ def run_corner_edfm_simulation(params):
         float(params.get('well_radius', 0.05)),
         float(params.get('well_pressure', 50.0)),
     )
+    if use_lgr_module and hasattr(sim, 'setInitialStateParameters'):
+        sim.setInitialStateParameters(
+            float(params.get('pressure', 200.0)),
+            float(params.get('sw', 0.2)),
+            float(params.get('sg', 0.05)),
+        )
+    if use_lgr_module and hasattr(sim, 'setLGRParameters'):
+        sim.setLGRParameters(
+            bool(params.get('enable_lgr', True)),
+            float(params.get('d_threshold', 30.0)),
+            int(params.get('lgr_nrx', 2)),
+            int(params.get('lgr_nry', 2)),
+            int(params.get('lgr_nrz', 2)),
+        )
     sim.setSimulationParameters(float(params.get('simulation_time', 100.0)))
 
     result = sim.runSimulation()
