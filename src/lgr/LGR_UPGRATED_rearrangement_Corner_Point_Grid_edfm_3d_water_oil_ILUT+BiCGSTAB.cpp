@@ -1022,7 +1022,7 @@ public:
     double dx{}, dy{}, dz{};
 
     bool enable_lgr{true};
-    double d_threshold{20.0};
+    double d_threshold{5.0};
     uint16_t lgr_Nrx{2}, lgr_Nry{2}, lgr_Nrz{2};
     int dbar_nsx{4}, dbar_nsy{4}, dbar_nsz{4};
     double eps_area_factor{1e-8};
@@ -1896,7 +1896,7 @@ public:
         std::cout << "Parent corner-point grid built: n_parent = " << n_parent << std::endl;
     }
 
-    void generateFractures(int total_fracs = 30,
+    void generateFractures(int total_fracs = 10,
                            double min_L = 30.0, double max_L = 80.0,
                            double max_dip = PI/3.0,
                            double min_strike = 0.0, double max_strike = PI,
@@ -1958,7 +1958,7 @@ public:
     }
 
     void generateHydraulicFractures(int total_fracs = 20,
-                                    double well_length = 2000,
+                                    double well_length = 600,
                                     double hf_len = 120.0,
                                     double hf_height = 30.0,
                                     double aperture_val = 0.1,

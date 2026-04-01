@@ -151,12 +151,13 @@ class MainWindow(QMainWindow):
         self.sim_stop_requested = False
         self.sim_output_buffer = ""
         self.pending_result_path = None
-        self.step_log_interval = 30
+        self.step_log_interval = 10
         self.current_sim_total_days = 100.0
         self.current_progress_days = 0.0
         self.current_progress_step = 0
         self.estimated_total_steps = 700
         self.pending_step_summary = False
+        self.pending_step_log = None
         self.default_grid_type = "corner_point"
         self.show_grid_type_selector = False
         self.current_algorithm = "black_oil"
@@ -1980,6 +1981,7 @@ class MainWindow(QMainWindow):
         self.current_progress_days = 0.0
         self.current_progress_step = 0
         self.pending_step_summary = False
+        self.pending_step_log = None
         self.update_progress_bar(0.0, 0, "准备启动")
 
     def update_progress_bar(self, current_days, step, status_text="运行中"):
@@ -2055,28 +2057,45 @@ class MainWindow(QMainWindow):
             return
 
         # Black Oil算法格式: Step 1 t=0.001 dt=...
-        step_match = re.match(r"^Step\s+(\d+)\s+t=([0-9eE.+-]+)\s+dt=", line)
+        step_match = re.match(r"^Step\s+(\d+)\s+t=([0-9eE.+-]+)\s+dt=([0-9eE.+-]+)", line)
         if step_match:
             step = int(step_match.group(1))
+            current_time = float(step_match.group(2))
+            dt = float(step_match.group(3))
             self.current_progress_step = max(self.current_progress_step, step)
-            should_display = ("ok" in line) and (step % self.step_log_interval == 0)
+            self.current_progress_days = max(self.current_progress_days, current_time)
+            should_display = (step % self.step_log_interval == 0)
             self.pending_step_summary = should_display
+            self.pending_step_log = {
+                "step": step,
+                "time": current_time,
+                "dt": dt,
+            }
+            self.update_progress_bar(self.current_progress_days, self.current_progress_step, "运行中")
             if should_display:
                 self.append_sim_status(line)
             return
 
         # Corner Point Grid算法格式: Step 1 @ T=0.0000 trying dt=0.001 ...
-        corner_step_match = re.match(r"^Step\s+(\d+)\s+@\s+T=([0-9eE.+-]+)\s+trying\s+dt=", line)
+        corner_step_match = re.match(r"^Step\s+(\d+)\s+@\s+T=([0-9eE.+-]+)\s+trying\s+dt=([0-9eE.+-]+)", line)
         if corner_step_match:
             step = int(corner_step_match.group(1))
             current_time = float(corner_step_match.group(2))
+            dt = float(corner_step_match.group(3))
             self.current_progress_step = max(self.current_progress_step, step)
             self.current_progress_days = max(self.current_progress_days, current_time)
             # Corner算法每10步显示一次
             should_display = (step % 10 == 0)
+            self.pending_step_log = {
+                "step": step,
+                "time": current_time,
+                "dt": dt,
+            }
             if should_display:
                 self.update_progress_bar(self.current_progress_days, self.current_progress_step, "Corner Grid 运行中")
                 self.append_sim_status(f"Step {step} @ T={current_time:.4f} days")
+            else:
+                self.update_progress_bar(self.current_progress_days, self.current_progress_step, "Corner Grid 运行中")
             return
 
         summary_match = re.match(r"^\s*t=([0-9eE.+-]+)\s+days,\s+P:", line)
@@ -2087,6 +2106,17 @@ class MainWindow(QMainWindow):
             if self.pending_step_summary:
                 self.append_sim_status(line)
             self.pending_step_summary = False
+            self.pending_step_log = None
+            return
+
+        if line == "ok" or line.startswith("Converged in "):
+            if self.pending_step_log is not None:
+                next_days = self.pending_step_log["time"] + self.pending_step_log["dt"]
+                self.current_progress_days = max(self.current_progress_days, next_days)
+                self.update_progress_bar(self.current_progress_days, self.current_progress_step, "运行中")
+                self.pending_step_log = None
+            self.pending_step_summary = False
+            self.append_sim_status(line)
             return
 
         if line.startswith("Step "):
