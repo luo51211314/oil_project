@@ -2463,6 +2463,77 @@ public:
         return result;
     }
 
+    // 获取LGR加密网格的几何信息（用于可视化加密网格）
+    py::array_t<double> getLGRGridGeometry() const {
+        // 返回每个leaf cell的8个角点坐标，格式: [n_leaf, 24] (8个点 * 3个坐标)
+        py::array_t<double> result(std::vector<py::ssize_t>{static_cast<py::ssize_t>(n_leaf), 24});
+        auto r = result.mutable_unchecked<2>();
+        for (int i = 0; i < n_leaf; ++i) {
+            const auto& c = leaves[i];
+            for (int j = 0; j < 8; ++j) {
+                r(i, j*3 + 0) = c.corners[j].x;
+                r(i, j*3 + 1) = c.corners[j].y;
+                r(i, j*3 + 2) = c.corners[j].z;
+            }
+        }
+        return result;
+    }
+
+    // 获取父网格的几何信息（未被加密的父单元格）
+    py::array_t<double> getParentGridGeometry() const {
+        // 只返回未被加密的父单元格
+        int n_parent_cells = 0;
+        for (const auto& p : parents) {
+            if (!p.refined) n_parent_cells++;
+        }
+
+        py::array_t<double> result(std::vector<py::ssize_t>{n_parent_cells, 24});
+        auto r = result.mutable_unchecked<2>();
+        int idx = 0;
+        for (const auto& p : parents) {
+            if (p.refined) continue;
+            // 获取父单元格的8个角点
+            for (int j = 0; j < 8; ++j) {
+                r(idx, j*3 + 0) = p.corners[j].x;
+                r(idx, j*3 + 1) = p.corners[j].y;
+                r(idx, j*3 + 2) = p.corners[j].z;
+            }
+            idx++;
+        }
+        return result;
+    }
+
+    // 获取加密后的子网格几何信息（被加密的父单元格的子单元格）
+    py::array_t<double> getRefinedGridGeometry() const {
+        // 只返回被加密的父单元格的子单元格
+        int n_refined_cells = 0;
+        for (const auto& p : parents) {
+            if (p.refined) {
+                n_refined_cells += p.Nrx * p.Nry * p.Nrz;
+            }
+        }
+
+        py::array_t<double> result(std::vector<py::ssize_t>{n_refined_cells, 24});
+        auto r = result.mutable_unchecked<2>();
+        int idx = 0;
+        for (const auto& p : parents) {
+            if (!p.refined) continue;
+            // 获取该父单元格的所有子单元格
+            int nsub = p.Nrx * p.Nry * p.Nrz;
+            for (int off = 0; off < nsub; ++off) {
+                int lid = p.leaf_base + off;
+                const auto& c = leaves[lid];
+                for (int j = 0; j < 8; ++j) {
+                    r(idx, j*3 + 0) = c.corners[j].x;
+                    r(idx, j*3 + 1) = c.corners[j].y;
+                    r(idx, j*3 + 2) = c.corners[j].z;
+                }
+                idx++;
+            }
+        }
+        return result;
+    }
+
     SimulationResult runSimulation() {
         if (coord_file_path.empty() || zcorn_file_path.empty()) {
             throw std::runtime_error("Corner-point input files are not set. Call setCornerPointFiles(coord, zcorn) first.");
@@ -3119,5 +3190,8 @@ PYBIND11_MODULE(edfm_core_corner_lgr, m) {
         .def("runSimulation", &SimulatorLGR::runSimulation)
         .def("getPressureData", &SimulatorLGR::getPressureData)
         .def("getFractureVertices", &SimulatorLGR::getFractureVertices)
-        .def("getCellGeometryWithPressure", &SimulatorLGR::getCellGeometryWithPressure);
+        .def("getCellGeometryWithPressure", &SimulatorLGR::getCellGeometryWithPressure)
+        .def("getLGRGridGeometry", &SimulatorLGR::getLGRGridGeometry)
+        .def("getParentGridGeometry", &SimulatorLGR::getParentGridGeometry)
+        .def("getRefinedGridGeometry", &SimulatorLGR::getRefinedGridGeometry);
 }
