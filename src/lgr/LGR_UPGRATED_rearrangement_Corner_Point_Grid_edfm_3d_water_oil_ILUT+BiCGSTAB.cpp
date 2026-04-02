@@ -1,4 +1,5 @@
 
+
 #include <array>
 #include <cctype>
 #include <cmath>
@@ -1908,53 +1909,74 @@ public:
         double use_max_y = (range_y_max < 0) ? Ly : range_y_max;
         double use_max_z = (range_z_max < 0) ? Lz : range_z_max;
         fractures.clear();
+        if (parents.empty()) {
+            std::cerr << "No parent cells available for fracture generation." << std::endl;
+            return;
+        }
+        std::vector<int> candidate_cells;
+        candidate_cells.reserve(parents.size());
+        for (int pid = 0; pid < (int)parents.size(); ++pid) {
+            const ParentCell& pc = parents[pid];
+            if (pc.bbox_min.x >= use_max_x || pc.bbox_max.x <= range_x_min) continue;
+            if (pc.bbox_min.y >= use_max_y || pc.bbox_max.y <= range_y_min) continue;
+            if (pc.bbox_min.z >= use_max_z || pc.bbox_max.z <= range_z_min) continue;
+            candidate_cells.push_back(pid);
+        }
+        if (candidate_cells.empty()) {
+            std::cerr << "No cells found in the specified range for fracture generation." << std::endl;
+            return;
+        }
         std::mt19937 rng(42);
-        std::uniform_real_distribution<double> distX(range_x_min, use_max_x);
-        std::uniform_real_distribution<double> distY(range_y_min, use_max_y);
-        std::uniform_real_distribution<double> distZ(range_z_min, use_max_z);
+        std::uniform_int_distribution<int> distCell(0, (int)candidate_cells.size() - 1);
+        std::uniform_real_distribution<double> dist01(0.0, 1.0);
         std::uniform_real_distribution<double> distAngle(min_strike, max_strike);
         std::uniform_real_distribution<double> distDip(0, max_dip);
-        std::uniform_real_distribution<double> distL(min_L, max_L);
-        auto inBox = [&](const Point3& p) -> bool {
-            return (p.x >= 0.0 && p.x <= Lx &&
-                    p.y >= 0.0 && p.y <= Ly &&
-                    p.z >= 0.0 && p.z <= Lz);
-        };
-        auto fracVerticesInBox = [&](const Fracture& f) -> bool {
-            return inBox(f.vertices[0]) && inBox(f.vertices[1]) &&
-                   inBox(f.vertices[2]) && inBox(f.vertices[3]);
-        };
         for (int i = 0; i < total_fracs; ++i) {
+            int cell_idx = distCell(rng);
+            int pid = candidate_cells[cell_idx];
+            const ParentCell& pc = parents[pid];
+            double cell_dx = pc.bbox_max.x - pc.bbox_min.x;
+            double cell_dy = pc.bbox_max.y - pc.bbox_min.y;
+            double cell_dz = pc.bbox_max.z - pc.bbox_min.z;
+            double max_len_in_cell = std::min({cell_dx, cell_dy, cell_dz}) * 0.9;
+            double actual_max_L = std::min(max_L, max_len_in_cell);
+            double actual_min_L = std::min(min_L, actual_max_L);
+            std::uniform_real_distribution<double> distL(actual_min_L, actual_max_L);
+            double len = distL(rng);
+            double height = len * 0.5;
+            double strike = distAngle(rng);
+            double dip = distDip(rng);
+            double margin_x = len * 0.6;
+            double margin_y = len * 0.6;
+            double margin_z = height * 0.6;
+            double cx_min = pc.bbox_min.x + margin_x;
+            double cx_max = pc.bbox_max.x - margin_x;
+            double cy_min = pc.bbox_min.y + margin_y;
+            double cy_max = pc.bbox_max.y - margin_y;
+            double cz_min = pc.bbox_min.z + margin_z;
+            double cz_max = pc.bbox_max.z - margin_z;
+            if (cx_max < cx_min) { cx_min = cx_max = (pc.bbox_min.x + pc.bbox_max.x) / 2.0; }
+            if (cy_max < cy_min) { cy_min = cy_max = (pc.bbox_min.y + pc.bbox_max.y) / 2.0; }
+            if (cz_max < cz_min) { cz_min = cz_max = (pc.bbox_min.z + pc.bbox_max.z) / 2.0; }
+            double cx = cx_min + dist01(rng) * (cx_max - cx_min);
+            double cy = cy_min + dist01(rng) * (cy_max - cy_min);
+            double cz = cz_min + dist01(rng) * (cz_max - cz_min);
+            Point3 center = {cx, cy, cz};
+            Point3 u = {cos(strike), sin(strike), 0};
+            Point3 n_horiz = {-sin(strike), cos(strike), 0};
+            Point3 v = {n_horiz.x * cos(dip), n_horiz.y * cos(dip), -sin(dip)};
             Fracture f;
             f.id = i;
             f.aperture = aperture_val;
             f.perm = perm_val;
             f.is_hydraulic = false;
-            int tries = 0;
-            while (true) {
-                if (++tries > 200000) {
-                    std::cerr << "Failed to place natural fracture " << i
-                              << " fully inside domain." << std::endl;
-                    return;
-                }
-                Point3 center = {distX(rng), distY(rng), distZ(rng)};
-                double len = distL(rng);
-                double height = distL(rng) * 0.5;
-                double strike = distAngle(rng);
-                double dip = distDip(rng);
-                Point3 u = {cos(strike), sin(strike), 0};
-                Point3 n_horiz = {-sin(strike), cos(strike), 0};
-                Point3 v = {n_horiz.x * cos(dip), n_horiz.y * cos(dip), -sin(dip)};
-                f.vertices[0] = center - u*(len/2) - v*(height/2);
-                f.vertices[1] = center + u*(len/2) - v*(height/2);
-                f.vertices[2] = center + u*(len/2) + v*(height/2);
-                f.vertices[3] = center - u*(len/2) + v*(height/2);
-                if (fracVerticesInBox(f)) {
-                    fractures.push_back(f);
-                    break;
-                }
-            }
+            f.vertices[0] = center - u*(len/2) - v*(height/2);
+            f.vertices[1] = center + u*(len/2) - v*(height/2);
+            f.vertices[2] = center + u*(len/2) + v*(height/2);
+            f.vertices[3] = center - u*(len/2) + v*(height/2);
+            fractures.push_back(f);
         }
+        std::cout << "Generated " << total_fracs << " natural fractures inside grid cells." << std::endl;
     }
 
     void generateHydraulicFractures(int total_fracs = 20,
@@ -1974,25 +1996,61 @@ public:
         double xc = (x_center < 0.0) ? (Lx / 2.0) : x_center;
         double yc = (y_center < 0.0) ? (Ly / 2.0) : y_center;
         double zc = (z_center < 0.0) ? (Lz / 2.0) : z_center;
-        double y_min = yc - hf_len / 2.0;
-        double y_max = yc + hf_len / 2.0;
-        double z_min = zc - hf_height / 2.0;
-        double z_max = zc + hf_height / 2.0;
-        if (y_min < 0.0 || y_max > Ly || z_min < 0.0 || z_max > Lz) {
-            std::cerr << "Hydraulic fracture geometry exceeds domain in y/z direction." << std::endl;
-            return;
-        }
-        if (total_fracs > 1) {
-            double x_start_check = xc - well_length / 2.0;
-            double x_end_check   = xc + well_length / 2.0;
-            if (x_start_check < 0.0 || x_end_check > Lx) {
-                std::cerr << "Hydraulic fracture distribution exceeds domain in x direction." << std::endl;
-                return;
+        auto findParentCell = [&](const Point3& p) -> int {
+            if (parents.empty()) return -1;
+            static Point3 gmin = {0,0,0}, gmax = {0,0,0};
+            static bool initialized = false;
+            if (!initialized) {
+                gmin = parents[0].bbox_min;
+                gmax = parents[0].bbox_max;
+                for (const auto& pc : parents) {
+                    gmin = pointMin(gmin, pc.bbox_min);
+                    gmax = pointMax(gmax, pc.bbox_max);
+                }
+                initialized = true;
             }
-        } else if (xc < 0.0 || xc > Lx) {
-            std::cerr << "Hydraulic fracture center exceeds domain in x direction." << std::endl;
-            return;
-        }
+            if (p.x < gmin.x || p.x > gmax.x ||
+                p.y < gmin.y || p.y > gmax.y ||
+                p.z < gmin.z || p.z > gmax.z) {
+                return -1;
+            }
+            int ci = static_cast<int>((p.x - gmin.x) / (gmax.x - gmin.x) * Nx);
+            int cj = static_cast<int>((p.y - gmin.y) / (gmax.y - gmin.y) * Ny);
+            int ck = static_cast<int>((p.z - gmin.z) / (gmax.z - gmin.z) * Nz);
+            ci = std::max(0, std::min(Nx - 1, ci));
+            cj = std::max(0, std::min(Ny - 1, cj));
+            ck = std::max(0, std::min(Nz - 1, ck));
+            const int di_range = 2;
+            const int dj_range = 2;
+            const int dk_range = 1;
+            for (int dk = -dk_range; dk <= dk_range; ++dk) {
+                int kk = ck + dk;
+                if (kk < 0 || kk >= Nz) continue;
+                for (int dj = -dj_range; dj <= dj_range; ++dj) {
+                    int jj = cj + dj;
+                    if (jj < 0 || jj >= Ny) continue;
+                    for (int di = -di_range; di <= di_range; ++di) {
+                        int ii = ci + di;
+                        if (ii < 0 || ii >= Nx) continue;
+                        int pid = kk * Nx * Ny + jj * Nx + ii;
+                        const ParentCell& pc = parents[pid];
+                        if (p.x >= pc.bbox_min.x && p.x <= pc.bbox_max.x &&
+                            p.y >= pc.bbox_min.y && p.y <= pc.bbox_max.y &&
+                            p.z >= pc.bbox_min.z && p.z <= pc.bbox_max.z) {
+                            return pid;
+                        }
+                    }
+                }
+            }
+            return -1;
+        };
+        auto pointInGrid = [&](const Point3& p) -> bool {
+            return findParentCell(p) >= 0;
+        };
+        auto fracVerticesInGrid = [&](const Fracture& f) -> bool {
+            return pointInGrid(f.vertices[0]) && pointInGrid(f.vertices[1]) &&
+                   pointInGrid(f.vertices[2]) && pointInGrid(f.vertices[3]);
+        };
         int base_id = (start_id >= 0) ? start_id : getNextFractureId();
         double spacing = 0.0;
         double x_start = xc;
@@ -2002,9 +2060,10 @@ public:
             double x_end = xc + well_length / 2.0 - eps_x;
             spacing = (x_end - x_start) / (total_fracs - 1);
         }
+        int valid_count = 0;
         for (int k = 0; k < total_fracs; ++k) {
             Fracture f;
-            f.id = base_id + k;
+            f.id = base_id + valid_count;
             f.aperture = aperture_val;
             f.perm = perm_val;
             f.is_hydraulic = true;
@@ -2013,10 +2072,17 @@ public:
             f.vertices[1] = {x_curr, yc + hf_len/2.0, zc - hf_height/2.0};
             f.vertices[2] = {x_curr, yc + hf_len/2.0, zc + hf_height/2.0};
             f.vertices[3] = {x_curr, yc - hf_len/2.0, zc + hf_height/2.0};
-            fractures.push_back(f);
+            if (fracVerticesInGrid(f)) {
+                fractures.push_back(f);
+                valid_count++;
+            } else {
+                std::cerr << "Warning: Hydraulic fracture " << k << " at x=" << x_curr
+                          << " exceeds actual grid bounds, skipped." << std::endl;
+            }
         }
-        std::cout << "Generated " << total_fracs << " hydraulic fractures. "
-                  << "ID range: [" << base_id << ", " << (base_id + total_fracs - 1) << "]" << std::endl;
+        std::cout << "Generated " << valid_count << " hydraulic fractures ("
+                  << total_fracs << " requested). "
+                  << "ID range: [" << base_id << ", " << (base_id + valid_count - 1) << "]" << std::endl;
     }
 
     static AABB fractureAABB(const Fracture& f) {
