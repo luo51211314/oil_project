@@ -2467,6 +2467,17 @@ class MainWindow(QMainWindow):
             'simulation_time': sim_params['simulation_time'],
         }
         
+        # 如果是加密模式，添加LGR参数
+        if self.corner_combo_grid_refinement.currentText() == "加密":
+            params['enable_lgr'] = True
+            params['d_threshold'] = 30.0
+            params['lgr_nrx'] = 2
+            params['lgr_nry'] = 2
+            params['lgr_nrz'] = 2
+            params['pressure'] = 200.0
+            params['sw'] = 0.2
+            params['sg'] = 0.05
+        
         self.sim_process = QProcess(self)
         self.sim_process.setWorkingDirectory(self.project_root)
         self.sim_process.setProgram(sys.executable)
@@ -2519,6 +2530,9 @@ class MainWindow(QMainWindow):
             self.sim_data.fractures = sim_data.fractures
             self.sim_data.wells = sim_data.wells
             self.sim_data.cell_geometry_with_pressure = sim_data.cell_geometry_with_pressure
+            self.sim_data.corner_lgr_grid_geometry = sim_data.corner_lgr_grid_geometry
+            self.sim_data.corner_lgr_parent_grid_geometry = sim_data.corner_lgr_parent_grid_geometry
+            self.sim_data.corner_lgr_refined_grid_geometry = sim_data.corner_lgr_refined_grid_geometry
             # 只在corner_point_grid不存在时才设置
             if self.sim_data.corner_point_grid is None:
                 self.sim_data.corner_point_grid = sim_data.corner_point_grid
@@ -2570,6 +2584,11 @@ class MainWindow(QMainWindow):
             self.vtk_renderer.render_corner_pressure_field(self.sim_data)
             self.vtk_renderer.render_corner_wells(self.sim_data)
             self.vtk_renderer.render_corner_fractures(self.sim_data)
+            
+            # 如果是LGR加密模式，渲染加密网格
+            if self.sim_data.corner_lgr_grid_geometry is not None:
+                self.vtk_renderer.render_corner_lgr_grid(self.sim_data)
+            
             self.update_corner_grid_statistics()
             self.clear_corner_selection_overlay(clear_params=False)
             

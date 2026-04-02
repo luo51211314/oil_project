@@ -534,12 +534,47 @@ class VTKRenderer:
         
         self.cache['fracture_actors'] = []
         
+        # 从grid_info获取网格范围
+        print(f"[DEBUG] grid_info: {sim_data.grid_info}")
+        if sim_data.grid_info:
+            Lx = sim_data.grid_info.get('Lx', 1000.0)
+            Ly = sim_data.grid_info.get('Ly', 500.0)
+            Lz = sim_data.grid_info.get('Lz', 100.0)
+            grid_min_x, grid_max_x = 0.0, Lx
+            grid_min_y, grid_max_y = 0.0, Ly
+            grid_min_z, grid_max_z = 0.0, Lz
+        else:
+            grid_min_x = grid_max_x = grid_min_y = grid_max_y = grid_min_z = grid_max_z = 0.0
+        print(f"[DEBUG] 网格范围: X[{grid_min_x}, {grid_max_x}], Y[{grid_min_y}, {grid_max_y}], Z[{grid_min_z}, {grid_max_z}]")
+        
         for frac in sim_data.fractures:
             points = vtk.vtkPoints()
             p0 = list(frac['points'][0])
             p1 = list(frac['points'][1])
             p2 = list(frac['points'][2])
             p3 = list(frac['points'][3])
+            
+            # 检查裂缝的所有顶点是否都在网格范围内
+            margin = 1.0  # 边距
+            all_points = [p0, p1, p2, p3]
+            
+            # 调试：打印31号裂缝的位置
+            if frac['id'] == 31:
+                print(f"[DEBUG] 裂缝 #31 的4个顶点:")
+                for i, pt in enumerate(all_points):
+                    print(f"  顶点{i}: ({pt[0]:.2f}, {pt[1]:.2f}, {pt[2]:.2f})")
+            
+            out_of_bounds = False
+            for i, pt in enumerate(all_points):
+                if not (grid_min_x - margin <= pt[0] <= grid_max_x + margin and
+                        grid_min_y - margin <= pt[1] <= grid_max_y + margin and
+                        grid_min_z - margin <= pt[2] <= grid_max_z + margin):
+                    out_of_bounds = True
+                    print(f"[警告] 裂缝 #{frac['id']} 顶点{i}超出网格范围，位置: ({pt[0]:.2f}, {pt[1]:.2f}, {pt[2]:.2f})")
+                    print(f"       网格范围: X[{grid_min_x:.2f}, {grid_max_x:.2f}], Y[{grid_min_y:.2f}, {grid_max_y:.2f}], Z[{grid_min_z:.2f}, {grid_max_z:.2f}]")
+            
+            if out_of_bounds:
+                continue
             
             center_x_frac = (p0[0] + p1[0] + p2[0] + p3[0]) / 4
             center_y_frac = (p0[1] + p1[1] + p2[1] + p3[1]) / 4
@@ -979,4 +1014,102 @@ class VTKRenderer:
             self.cache['pressure_field_actor'].SetVisibility(visible)
         if 'pressure_scalar_bar' in self.cache and self.cache['pressure_scalar_bar']:
             self.cache['pressure_scalar_bar'].SetVisibility(visible)
+        self.vtk_widget.iren.Render()
+
+    def _create_grid_lines_actor(self, grid_geom, color, line_width, opacity):
+        """创建网格线框actor的辅助函数"""
+        if grid_geom is None or grid_geom.shape[0] == 0:
+            return None
+        
+        n_cells = grid_geom.shape[0]
+        
+        # 创建单元格的12条边（每个六面体有12条边）
+        edges = [
+            (0, 1), (1, 2), (2, 3), (3, 0),  # 底面
+            (4, 5), (5, 6), (6, 7), (7, 4),  # 顶面
+            (0, 4), (1, 5), (2, 6), (3, 7),  # 侧面
+        ]
+        
+        points = vtk.vtkPoints()
+        lines = vtk.vtkCellArray()
+        
+        for i in range(n_cells):
+            # 获取当前单元的8个角点
+            cell_corners = []
+            for j in range(8):
+                x = grid_geom[i, j*3 + 0]
+                y = grid_geom[i, j*3 + 1]
+                z = grid_geom[i, j*3 + 2]
+                cell_corners.append((x, y, z))
+            
+            # 为每条边添加点和线
+            for edge in edges:
+                p1 = cell_corners[edge[0]]
+                p2 = cell_corners[edge[1]]
+                
+                pid1 = points.InsertNextPoint(p1)
+                pid2 = points.InsertNextPoint(p2)
+                
+                line = vtk.vtkLine()
+                line.GetPointIds().SetId(0, pid1)
+                line.GetPointIds().SetId(1, pid2)
+                lines.InsertNextCell(line)
+        
+        polydata = vtk.vtkPolyData()
+        polydata.SetPoints(points)
+        polydata.SetLines(lines)
+        
+        mapper = vtk.vtkPolyDataMapper()
+        mapper.SetInputData(polydata)
+        
+        actor = vtk.vtkActor()
+        actor.SetMapper(mapper)
+        actor.GetProperty().SetColor(color[0], color[1], color[2])
+        actor.GetProperty().SetLineWidth(line_width)
+        actor.GetProperty().SetOpacity(opacity)
+        
+        return actor
+
+    def render_corner_lgr_grid(self, sim_data):
+        """渲染Corner Point Grid LGR加密网格 - 区分父网格和加密网格"""
+        renderer = self.renderer
+        
+        # 清除之前的LGR网格
+        if 'corner_lgr_parent_grid_actor' in self.cache and self.cache['corner_lgr_parent_grid_actor']:
+            renderer.RemoveActor(self.cache['corner_lgr_parent_grid_actor'])
+        if 'corner_lgr_refined_grid_actor' in self.cache and self.cache['corner_lgr_refined_grid_actor']:
+            renderer.RemoveActor(self.cache['corner_lgr_refined_grid_actor'])
+        
+        # 渲染父网格（未加密的单元格）- 灰色
+        if sim_data.corner_lgr_parent_grid_geometry is not None:
+            parent_actor = self._create_grid_lines_actor(
+                sim_data.corner_lgr_parent_grid_geometry,
+                (0.5, 0.5, 0.5),  # 灰色
+                0.5,  # 线宽
+                0.3   # 透明度
+            )
+            if parent_actor:
+                renderer.AddActor(parent_actor)
+                self.cache['corner_lgr_parent_grid_actor'] = parent_actor
+        
+        # 渲染加密后的子网格 - 深灰色
+        if sim_data.corner_lgr_refined_grid_geometry is not None:
+            refined_actor = self._create_grid_lines_actor(
+                sim_data.corner_lgr_refined_grid_geometry,
+                (0.2, 0.2, 0.2),  # 深灰色
+                1.0,  # 线宽（更粗）
+                0.8   # 透明度（更不透明）
+            )
+            if refined_actor:
+                renderer.AddActor(refined_actor)
+                self.cache['corner_lgr_refined_grid_actor'] = refined_actor
+        
+        self.vtk_widget.iren.Render()
+
+    def toggle_corner_lgr_grid_visibility(self, visible):
+        """切换Corner Point Grid LGR加密网格显示"""
+        if 'corner_lgr_parent_grid_actor' in self.cache and self.cache['corner_lgr_parent_grid_actor']:
+            self.cache['corner_lgr_parent_grid_actor'].SetVisibility(visible)
+        if 'corner_lgr_refined_grid_actor' in self.cache and self.cache['corner_lgr_refined_grid_actor']:
+            self.cache['corner_lgr_refined_grid_actor'].SetVisibility(visible)
         self.vtk_widget.iren.Render()
