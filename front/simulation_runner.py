@@ -290,11 +290,26 @@ def run_corner_edfm_simulation(params):
     except:
         fracture_vertices = None
     
+    # 如果是LGR加密模式，获取加密网格几何
+    corner_lgr_grid_geometry = None
+    corner_lgr_parent_grid_geometry = None
+    corner_lgr_refined_grid_geometry = None
+    if use_lgr_module:
+        try:
+            corner_lgr_grid_geometry = sim.getLGRGridGeometry()
+            corner_lgr_parent_grid_geometry = sim.getParentGridGeometry()
+            corner_lgr_refined_grid_geometry = sim.getRefinedGridGeometry()
+        except Exception as e:
+            print(f"Warning: could not get LGR grid geometry: {e}", flush=True)
+    
     nx, ny, nz, lx, ly, lz = load_corner_grid_info(coord_file, zcorn_file)
 
     sim_data = SimulationData()
     sim_data.generate_from_cpp(result, nx, ny, nz, lx, ly, lz, [], [])
     sim_data.cell_geometry_with_pressure = cell_geometry
+    sim_data.corner_lgr_grid_geometry = corner_lgr_grid_geometry
+    sim_data.corner_lgr_parent_grid_geometry = corner_lgr_parent_grid_geometry
+    sim_data.corner_lgr_refined_grid_geometry = corner_lgr_refined_grid_geometry
     
     # 插值由C++算法完成，不再在Python中做插值
     return sim_data

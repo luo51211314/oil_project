@@ -145,6 +145,9 @@ class SimulationData:
         self.interpolated_pressure = []
         self.corner_point_grid = None
         self.cell_geometry_with_pressure = None
+        self.corner_lgr_grid_geometry = None  # Corner Point Grid LGR加密网格几何数据
+        self.corner_lgr_parent_grid_geometry = None  # 父网格几何（未加密）
+        self.corner_lgr_refined_grid_geometry = None  # 加密后的子网格几何
         
     def generate_from_cpp(self, sim_result, nx, ny, nz, lx, ly, lz, grid_lines=None, interpolated_pressure=None):
         """从C++结果生成数据"""
@@ -225,6 +228,18 @@ class SimulationData:
         if self.cell_geometry_with_pressure is not None and isinstance(self.cell_geometry_with_pressure, np.ndarray):
             cell_geom_list = self.cell_geometry_with_pressure.tolist()
         
+        lgr_geom_list = None
+        if self.corner_lgr_grid_geometry is not None and isinstance(self.corner_lgr_grid_geometry, np.ndarray):
+            lgr_geom_list = self.corner_lgr_grid_geometry.tolist()
+        
+        parent_geom_list = None
+        if self.corner_lgr_parent_grid_geometry is not None and isinstance(self.corner_lgr_parent_grid_geometry, np.ndarray):
+            parent_geom_list = self.corner_lgr_parent_grid_geometry.tolist()
+        
+        refined_geom_list = None
+        if self.corner_lgr_refined_grid_geometry is not None and isinstance(self.corner_lgr_refined_grid_geometry, np.ndarray):
+            refined_geom_list = self.corner_lgr_refined_grid_geometry.tolist()
+        
         return {
             'grid_info': dict(self.grid_info),
             'pressure_field': [list(point) for point in self.pressure_field],
@@ -242,6 +257,9 @@ class SimulationData:
             'wells': list(self.wells),
             'corner_point_grid': self.corner_point_grid.to_dict() if self.corner_point_grid else None,
             'cell_geometry_with_pressure': cell_geom_list,
+            'corner_lgr_grid_geometry': lgr_geom_list,
+            'corner_lgr_parent_grid_geometry': parent_geom_list,
+            'corner_lgr_refined_grid_geometry': refined_geom_list,
         }
 
     def load_dict(self, payload):
@@ -275,6 +293,24 @@ class SimulationData:
             self.cell_geometry_with_pressure = np.array(cell_geom_list, dtype=np.float64)
         else:
             self.cell_geometry_with_pressure = None
+        
+        lgr_geom_list = payload.get('corner_lgr_grid_geometry')
+        if lgr_geom_list is not None:
+            self.corner_lgr_grid_geometry = np.array(lgr_geom_list, dtype=np.float64)
+        else:
+            self.corner_lgr_grid_geometry = None
+        
+        parent_geom_list = payload.get('corner_lgr_parent_grid_geometry')
+        if parent_geom_list is not None:
+            self.corner_lgr_parent_grid_geometry = np.array(parent_geom_list, dtype=np.float64)
+        else:
+            self.corner_lgr_parent_grid_geometry = None
+        
+        refined_geom_list = payload.get('corner_lgr_refined_grid_geometry')
+        if refined_geom_list is not None:
+            self.corner_lgr_refined_grid_geometry = np.array(refined_geom_list, dtype=np.float64)
+        else:
+            self.corner_lgr_refined_grid_geometry = None
 
     def save_json(self, output_path):
         """将模拟结果写入JSON文件。"""
