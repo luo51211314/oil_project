@@ -736,7 +736,7 @@ class MainWindow(QMainWindow):
 
         self.check_enable_lgr = QCheckBox("启用加密")
         self.check_enable_lgr.setChecked(True)
-        self.refined_spin_d_threshold = self.create_double_spinbox(0.0, 10000.0, 30.0, decimals=2)
+        self.refined_spin_d_threshold = self.create_double_spinbox(0.0, 10000.0, 5.0, decimals=2)
         self.refined_spin_lgr_nrx = self.create_spinbox(1, 20, 2)
         self.refined_spin_lgr_nry = self.create_spinbox(1, 20, 2)
         self.refined_spin_lgr_nrz = self.create_spinbox(1, 20, 2)
@@ -1493,15 +1493,14 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.corner_check_enable_hydraulic)
         
         self.corner_natural_frac_panel = NaturalFracturesPanel()
-        # 设置corner专用的默认值（不影响black_oil）
-        self.corner_natural_frac_panel.spin_num_fracs.setValue(60)
+        self.corner_natural_frac_panel.spin_num_fracs.setValue(10)
         self.corner_natural_frac_panel.spin_aperture.setValue(0.01)
         layout.addWidget(self.corner_natural_frac_panel)
         
         self.corner_hydraulic_frac_panel = HydraulicFracturesPanel()
-        # 设置corner专用的默认值（不影响black_oil）
         self.corner_hydraulic_frac_panel.spin_half_len.setValue(120.0)
         self.corner_hydraulic_frac_panel.spin_height.setValue(30.0)
+        self.corner_hydraulic_frac_panel.spin_aperture.setValue(0.1)
         layout.addWidget(self.corner_hydraulic_frac_panel)
         
         layout.addStretch()
@@ -2388,6 +2387,11 @@ class MainWindow(QMainWindow):
         self.append_sim_status(f"ZCORN: {self.corner_zcorn_file_path}")
         self.append_sim_status(f"Grid origin: ({origin_x}, {origin_y}, {origin_z})")
         self.append_sim_status(f"Grid size: ({lx}, {ly}, {lz})")
+        self.append_sim_status(f"Natural fractures: {natural_frac_params['num_fracs']}, aperture={natural_frac_params['aperture']}")
+        self.append_sim_status(f"Hydraulic fractures: {hydraulic_frac_params['num_stages']}, aperture={hydraulic_frac_params['aperture']}")
+        self.append_sim_status(f"LGR enabled: {self.corner_combo_grid_refinement.currentText()}")
+        if self.corner_combo_grid_refinement.currentText() == "加密":
+            self.append_sim_status(f"d_threshold: 5.0, lgr_nrx=2, lgr_nry=2, lgr_nrz=2")
         self.append_sim_status(f"Well abs coords: ({well_params['x']}, {well_params['y']}, {well_params['z']})")
         self.append_sim_status(f"Well pressure: {well_params['pressure']} bar")
         self.append_sim_status(f"Well radius: {well_params['radius']} m")
@@ -2402,6 +2406,7 @@ class MainWindow(QMainWindow):
             height = hydraulic_frac_params['height']
             self.append_sim_status(f"Well relative coords: ({rel_well_x}, {rel_well_y}, {rel_well_z})")
             self.append_sim_status(f"Hydraulic frac params: half_len={half_len}, height={height}")
+            self.append_sim_status(f"hf_length (passed to C++): {half_len * 2.0}, hf_height: {height}")
         
         tmp_dir = os.path.join(self.project_root, '.tmp')
         os.makedirs(tmp_dir, exist_ok=True)
@@ -2414,22 +2419,22 @@ class MainWindow(QMainWindow):
             'corner_grid_refinement': self.corner_combo_grid_refinement.currentText(),
             'coord_file': self.corner_coord_file_path,
             'zcorn_file': self.corner_zcorn_file_path,
-            'num_fracs': natural_frac_params.get('num_fracs', 60),  # 默认60
+            'num_fracs': natural_frac_params.get('num_fracs', 10),
             'min_len': natural_frac_params.get('min_len', 30.0),
             'max_len': natural_frac_params.get('max_len', 80.0),
             'max_dip': 3.14159 / 3.0,
             'min_strike': 0.0,
             'max_strike': 3.14159,
-            'aperture': natural_frac_params.get('aperture', 0.01),  # 默认0.01
+            'aperture': natural_frac_params.get('aperture', 0.01),
             'frac_perm': natural_frac_params.get('perm', 1000.0),
             'hf_enabled': self.corner_check_enable_hydraulic.isChecked(),
             'hf_count': hydraulic_frac_params['num_stages'] if self.corner_check_enable_hydraulic.isChecked() else 0,
-            'hf_well_length': 100.0,
-            'hf_length': hydraulic_frac_params.get('half_len', 120.0) * 2.0 if self.corner_check_enable_hydraulic.isChecked() else 240.0,  # 默认120*2
-            'hf_height': hydraulic_frac_params.get('height', 30.0) if self.corner_check_enable_hydraulic.isChecked() else 30.0,  # 默认30
-            'hf_aperture': hydraulic_frac_params.get('aperture', 0.01) if self.corner_check_enable_hydraulic.isChecked() else 0.01,
+            'hf_well_length': 600.0,
+            'hf_length': hydraulic_frac_params.get('half_len', 120.0) if self.corner_check_enable_hydraulic.isChecked() else 120.0,
+            'hf_height': hydraulic_frac_params.get('height', 30.0) if self.corner_check_enable_hydraulic.isChecked() else 30.0,
+            'hf_aperture': hydraulic_frac_params.get('aperture', 0.1) if self.corner_check_enable_hydraulic.isChecked() else 0.1,
             'hf_perm': hydraulic_frac_params['perm'] if self.corner_check_enable_hydraulic.isChecked() else 1000.0,
-            'hf_center_x': -1.0 if self.corner_check_enable_hydraulic.isChecked() else -1.0,  # 自动中心
+            'hf_center_x': -1.0 if self.corner_check_enable_hydraulic.isChecked() else -1.0,
             'hf_center_y': -1.0 if self.corner_check_enable_hydraulic.isChecked() else -1.0,
             'hf_center_z': -1.0 if self.corner_check_enable_hydraulic.isChecked() else -1.0,
             'well_radius': well_params['radius'],
@@ -2440,13 +2445,21 @@ class MainWindow(QMainWindow):
         # 如果是加密模式，添加LGR参数
         if self.corner_combo_grid_refinement.currentText() == "加密":
             params['enable_lgr'] = True
-            params['d_threshold'] = 30.0
+            params['d_threshold'] = 5.0
             params['lgr_nrx'] = 2
             params['lgr_nry'] = 2
             params['lgr_nrz'] = 2
-            params['pressure'] = 200.0
-            params['sw'] = 0.2
-            params['sg'] = 0.05
+            params['pressure'] = 800.0
+            params['sw'] = 0.05
+            params['sg'] = 0.9
+        
+        self.append_sim_status(f"=== Full Parameters ===")
+        self.append_sim_status(f"num_fracs: {params.get('num_fracs')}")
+        self.append_sim_status(f"hf_count: {params.get('hf_count')}")
+        self.append_sim_status(f"hf_length: {params.get('hf_length')}")
+        self.append_sim_status(f"hf_height: {params.get('hf_height')}")
+        self.append_sim_status(f"d_threshold: {params.get('d_threshold')}")
+        self.append_sim_status(f"enable_lgr: {params.get('enable_lgr')}")
         
         self.sim_process = QProcess(self)
         self.sim_process.setWorkingDirectory(self.project_root)

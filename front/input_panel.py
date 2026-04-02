@@ -99,31 +99,31 @@ class GridInputPanel(QWidget):
         group.setStyleSheet(groupbox_style())
         grid = QGridLayout()
         
-        # 与原始算法CSV一致 (20x10x2, 1000x500x50)
+        # 与C++代码默认值一致 (150x15x2, 3000x300x40)
         self.spin_nx = QSpinBox()
         self.spin_nx.setRange(1, 200)
-        self.spin_nx.setValue(20)
+        self.spin_nx.setValue(150)
         
         self.spin_ny = QSpinBox()
         self.spin_ny.setRange(1, 100)
-        self.spin_ny.setValue(10)
+        self.spin_ny.setValue(15)
         
         self.spin_nz = QSpinBox()
         self.spin_nz.setRange(1, 50)
         self.spin_nz.setValue(2)
         
-        # 域大小与原始算法CSV一致
+        # 域大小与C++代码默认值一致
         self.spin_lx = QDoubleSpinBox()
         self.spin_lx.setRange(1, 10000)
-        self.spin_lx.setValue(1000)
+        self.spin_lx.setValue(3000)
         
         self.spin_ly = QDoubleSpinBox()
         self.spin_ly.setRange(1, 10000)
-        self.spin_ly.setValue(500)
+        self.spin_ly.setValue(300)
         
         self.spin_lz = QDoubleSpinBox()
         self.spin_lz.setRange(1, 1000)
-        self.spin_lz.setValue(50)
+        self.spin_lz.setValue(40)
         
         grid.addWidget(QLabel("Nx:"), 0, 0)
         grid.addWidget(self.spin_nx, 0, 1)
@@ -230,10 +230,10 @@ class FracturesInputPanel(QWidget):
         group.setStyleSheet(groupbox_style())
         grid = QGridLayout()
         
-        # 修正参数: 与原始算法一致 - 100个裂缝, 长度30-80m, 开度0.001m
+        # 修正参数: 与C++代码默认值一致 - 10个裂缝, 长度30-80m, 开度0.01m
         self.spin_num_fracs = QSpinBox()
         self.spin_num_fracs.setRange(0, 200)
-        self.spin_num_fracs.setValue(100)
+        self.spin_num_fracs.setValue(10)
         
         self.spin_min_len = QDoubleSpinBox()
         self.spin_min_len.setRange(1, 500)
@@ -246,7 +246,7 @@ class FracturesInputPanel(QWidget):
         self.spin_aperture = QDoubleSpinBox()
         self.spin_aperture.setDecimals(4)
         self.spin_aperture.setRange(0.0, 1.0)
-        self.spin_aperture.setValue(0.001)
+        self.spin_aperture.setValue(0.01)
         
         grid.addWidget(QLabel("Num Fractures:"), 0, 0)
         grid.addWidget(self.spin_num_fracs, 0, 1)
@@ -303,10 +303,10 @@ class MatrixPropertiesPanel(QWidget):
         group.setStyleSheet(groupbox_style())
         grid = QGridLayout()
         
-        self.spin_porosity = create_double_spinbox(0.0, 1.0, 0.2, decimals=4)
-        self.spin_perm_x = create_double_spinbox(0.0, 1000000, 0.001, decimals=6)
-        self.spin_perm_y = create_double_spinbox(0.0, 1000000, 0.001, decimals=6)
-        self.spin_perm_z = create_double_spinbox(0.0, 1000000, 0.0001, decimals=6)
+        self.spin_porosity = create_double_spinbox(0.0, 1.0, 0.04, decimals=4)
+        self.spin_perm_x = create_double_spinbox(0.0, 1000000, 0.005, decimals=6)
+        self.spin_perm_y = create_double_spinbox(0.0, 1000000, 0.005, decimals=6)
+        self.spin_perm_z = create_double_spinbox(0.0, 1000000, 0.005, decimals=6)
         
         grid.addWidget(QLabel("Porosity:"), 0, 0)
         grid.addWidget(self.spin_porosity, 0, 1)
@@ -409,9 +409,9 @@ class InitialStatePanel(QWidget):
         group.setStyleSheet(groupbox_style())
         grid = QGridLayout()
         
-        self.spin_initial_pressure = create_double_spinbox(0.0, 1000000, 200.0, decimals=2)
-        self.spin_initial_sw = create_double_spinbox(0.0, 1.0, 0.2, decimals=4)
-        self.spin_initial_sg = create_double_spinbox(0.0, 1.0, 0.05, decimals=4)
+        self.spin_initial_pressure = create_double_spinbox(0.0, 1000000, 800.0, decimals=2)
+        self.spin_initial_sw = create_double_spinbox(0.0, 1.0, 0.05, decimals=4)
+        self.spin_initial_sg = create_double_spinbox(0.0, 1.0, 0.9, decimals=4)
         
         grid.addWidget(QLabel("Pressure (bar):"), 0, 0)
         grid.addWidget(self.spin_initial_pressure, 0, 1)
@@ -446,10 +446,10 @@ class NaturalFracturesPanel(QWidget):
         group.setStyleSheet(groupbox_style())
         grid = QGridLayout()
         
-        self.spin_num_fracs = create_spinbox(0, 500, 100)
+        self.spin_num_fracs = create_spinbox(0, 500, 10)
         self.spin_min_len = create_double_spinbox(0.0, 100000.0, 30.0, decimals=2)
         self.spin_max_len = create_double_spinbox(0.0, 100000.0, 80.0, decimals=2)
-        self.spin_aperture = create_double_spinbox(0.0, 10.0, 0.001, decimals=4)
+        self.spin_aperture = create_double_spinbox(0.0, 10.0, 0.01, decimals=4)
         self.spin_perm = create_double_spinbox(0.0, 1000000.0, 1000.0, decimals=2)
         
         grid.addWidget(QLabel("裂缝数量:"), 0, 0)
@@ -491,8 +491,8 @@ class HydraulicFracturesPanel(QWidget):
         group.setStyleSheet(groupbox_style())
         grid = QGridLayout()
         
-        self.spin_num_stages = create_spinbox(1, 50, 5)
-        self.spin_half_len = create_double_spinbox(0.0, 10000.0, 100.0, decimals=2)
+        self.spin_num_stages = create_spinbox(1, 50, 20)
+        self.spin_half_len = create_double_spinbox(0.0, 10000.0, 120.0, decimals=2)
         self.spin_height = create_double_spinbox(0.0, 1000.0, 30.0, decimals=2)
         self.spin_aperture = create_double_spinbox(0.0, 10.0, 0.1, decimals=4)
         self.spin_perm = create_double_spinbox(0.0, 1000000.0, 1000.0, decimals=2)
