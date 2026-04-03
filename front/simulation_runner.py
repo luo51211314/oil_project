@@ -239,21 +239,21 @@ def run_corner_edfm_simulation(params):
     sim = edfm_core_corner.EDFMSimulator()
     sim.setCornerPointFiles(coord_file, zcorn_file)
     sim.setFractureParameters(
-        int(params.get('num_fracs', 0)),
+        int(params.get('num_fracs', 10)),
         float(params.get('min_len', 30.0)),
         float(params.get('max_len', 80.0)),
         float(params.get('max_dip', math.pi / 3.0)),
         float(params.get('min_strike', 0.0)),
         float(params.get('max_strike', math.pi)),
-        float(params.get('aperture', 0.001)),
+        float(params.get('aperture', 0.01)),
         float(params.get('frac_perm', 1000.0)),
     )
     sim.setHydraulicFractureParameters(
-        int(params.get('hf_count', 0)) if params.get('hf_enabled', True) else 0,
-        float(params.get('hf_well_length', 800.0)),
-        float(params.get('hf_length', 50.0)),
-        float(params.get('hf_height', 40.0)),
-        float(params.get('hf_aperture', 0.01)),
+        int(params.get('hf_count', 20)) if params.get('hf_enabled', True) else 0,
+        float(params.get('hf_well_length', 600.0)),
+        float(params.get('hf_length', 120.0)),
+        float(params.get('hf_height', 30.0)),
+        float(params.get('hf_aperture', 0.1)),
         float(params.get('hf_perm', 1000.0)),
         float(params.get('hf_center_x', -1.0)),
         float(params.get('hf_center_y', -1.0)),
@@ -265,14 +265,14 @@ def run_corner_edfm_simulation(params):
     )
     if use_lgr_module and hasattr(sim, 'setInitialStateParameters'):
         sim.setInitialStateParameters(
-            float(params.get('pressure', 200.0)),
-            float(params.get('sw', 0.2)),
-            float(params.get('sg', 0.05)),
+            float(params.get('pressure', 800.0)),
+            float(params.get('sw', 0.05)),
+            float(params.get('sg', 0.9)),
         )
     if use_lgr_module and hasattr(sim, 'setLGRParameters'):
         sim.setLGRParameters(
             bool(params.get('enable_lgr', True)),
-            float(params.get('d_threshold', 30.0)),
+            float(params.get('d_threshold', 5.0)),
             int(params.get('lgr_nrx', 2)),
             int(params.get('lgr_nry', 2)),
             int(params.get('lgr_nrz', 2)),
